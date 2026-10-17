@@ -1,137 +1,107 @@
-# Run the local Minecraft agent
+# Control the Prism Minecraft client with Codex and JEVi
 
-Run the agent from this checkout against a private vanilla Minecraft server.
-It joins once, observes the world, gets one strategic goal from Codex-LB, asks
-TypeSafe to choose one app-defined action, verifies that action, saves progress,
-and disconnects. The process never loops into a survival run.
+This app controls the player already running in Prism Launcher. A small Fabric
+client mod reads the live world and framebuffer, then accepts only the three
+bounded action IDs defined by this app. It never starts a second Minecraft
+connection or closes Prism.
 
-The package requires Node.js 22.9 or later. The selected Minecraft 1.21.8 server
-requires Java 21. The package pins Mineflayer 4.39.0, Pathfinder 2.4.5, and the
-OpenAI SDK 7.36.0.
+The first run performs one cycle: Codex returns a validated goal, JEVi selects
+from the exact app-owned choices, the Prism player performs the selected action,
+and Node verifies the result from a fresh observation. A local panel shows the
+current POV and each validated step.
 
-## Install the project
+## Install the Prism bridge
 
-Run:
+Use the vanilla 1.21.8 Prism instance. Install Fabric Loader 0.19.5 and Fabric
+API 0.136.1+1.21.8 for Minecraft 1.21.8. Do not add these files to the
+Fabulously Optimized instance.
+
+Build the mod:
+
+~~~
+cd fabric-client
+./gradlew build
+~~~
+
+Copy
+<code>fabric-client/build/libs/prism-agent-bridge-0.1.0.jar</code> into the
+1.21.8 instance's <code>minecraft/mods/</code> folder. Create
+<code>minecraft/config/minecraft-agent-bridge.json</code> with this shape:
+
+~~~
+{"token":"64 hexadecimal characters"}
+~~~
+
+The token must match <code>PRISM_BRIDGE_TOKEN</code> in the project's ignored
+<code>.env</code> file. The mod binds only to
+<code>127.0.0.1:8766</code>. Keep the token out of screenshots, provider
+requests, and the panel URL.
+
+## Configure and run
+
+Set <code>CODEX_LB_API_KEY</code>, <code>TYPESAFE_API_KEY</code>, and
+<code>PRISM_BRIDGE_TOKEN</code> in <code>.env</code>. The Codex gateway defaults
+to <code>http://192.168.2.28:2455/backend-api/codex</code> and model
+<code>gpt-6-luna</code>. TypeSafe defaults to
+<code>https://api.typesafe.ai/v1/systemone</code> and model
+<code>jev-latest</code>.
+
+Start the local 1.21.8 server if needed, launch the Prism 1.21.8 instance, and
+join the intended world. Then run:
 
 ~~~
 npm install
-npm test
+npm start
 ~~~
 
-The tests run without provider credentials or a Minecraft server.
+The app prints the local panel URL, normally
+<code>http://127.0.0.1:8765/</code>. It waits for the authenticated Prism
+client, then runs exactly one action cycle. The panel Stop button cancels the
+action, releases bridge-owned keys, and closes the local controller. Prism stays
+open. Press Ctrl-C for the same cleanup.
 
-## Set provider credentials
+Use <code>npm run smoke:minecraft</code> to attach read-only to the already-open
+Prism player and print a small state summary. It does not create a Minecraft
+player.
 
-Set `CODEX_LB_API_KEY` in your shell or in an ignored `.env` file. The gateway
-defaults to `http://192.168.2.28:2455/backend-api/codex` and the model defaults
-to `gpt-6-luna`. Process environment values take precedence over `.env`.
+## Live panel and provider boundary
 
-Supply `TYPESAFE_API_KEY` through the existing local secure-storage workflow.
-The app reads it from the process environment. Keep the TypeSafe and Codex-LB
-credentials separate.
+The panel receives the validated Codex goal, the exact choices sent to JEVi,
+JEVi's selected action ID, execution status, verifier evidence, and checkpoint
+result. It does not display hidden model reasoning or invent a rationale.
+Screenshots remain in memory and on loopback; they are not sent to providers or
+saved to disk. The panel has no authentication, so programs on the same computer
+can read its event stream and live frame.
 
-The app does not print or persist provider keys. Do not commit `.env`.
+Codex and JEVi receive structured game observations and the bounded goal/action
+choices needed for their requests. They do not receive the screenshot. JEVi
+cannot choose coordinates or send executable code.
 
-## Configure a private server
+## Progress and verification
 
-Download the <a href="https://www.minecraft.net/en-us/download/server">official Minecraft server jar</a>
-for 1.21.8 into <code>runtime/server/</code>. Read the Minecraft EULA and set
-<code>eula=true</code> in <code>runtime/server/eula.txt</code> yourself. The app
-never accepts the EULA for you.
+Progress is stored at <code>runtime/progress.json</code>. A checkpoint is saved
+only after a fresh Prism observation passes the action's independent
+postcondition. The advancement check reads
+<code>runtime/server/world/advancements/</code> using the UUID reported by the
+connected Prism player. If the local server uses a different world directory or
+player identity, victory remains unknown.
 
-Set these values in `runtime/server/server.properties`:
-
-~~~
-server-ip=127.0.0.1
-server-port=25565
-online-mode=false
-difficulty=normal
-~~~
-
-Start the server with Java 21:
-
-~~~
-cd runtime/server
-java -Xms1G -Xmx2G -jar minecraft_server.1.21.8.jar nogui
-~~~
-
-The bridge uses offline authentication. Keep both the server and bot bound to
-loopback. Never use offline authentication on a LAN or public server.
-
-## Run the smoke checks
-
-Run each check separately. The first two make one read-only provider request.
-The Minecraft check joins, observes state, and disconnects without an action.
-The agent check plans and runs at most one bounded action.
-
-~~~
-npm run smoke:codex-lb
-npm run smoke:typesafe-jev
-npm run smoke:minecraft
-npm run smoke:agent
-~~~
-
-Run <code>npm start</code> to run the same one-cycle agent command.
-
-## Progress and victory evidence
-
-The app stores progress at <code>runtime/progress.json</code>. It writes a
-checkpoint only after an action's fresh observation passes its postcondition.
-The write uses a temporary file and an atomic rename. Invalid progress stops
-the run without replacing the file.
-
-Seed, death count, and retry count stay unknown until the runtime can measure
-them reliably. The advancement status is cleared on each verified action and
-confirmed again only from the current server-owned player file.
-
-The advancement check reads the bot UUID's file under
-<code>runtime/server/world/advancements/</code>. It reports victory only when
-the file contains <code>minecraft:end/kill_dragon</code> with
-<code>done: true</code>. A missing or invalid file does not produce a victory
-claim.
+The bridge accepts only <code>wait_20_ticks</code>,
+<code>look_at_observed_block</code>, and
+<code>move_near_observed_position</code>. It does not break/place blocks, jump,
+sprint, chat, manipulate inventory, or accept model-authored parameters.
+Movement is short, rechecks a clear supported path, stops for manual input, and
+releases its forward key on every terminal path. The mod enforces its own action
+deadline if the Node process disappears.
 
 ## Local settings
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MINECRAFT_HOST` | `127.0.0.1` | Local server address. Other hosts are rejected. |
-| `MINECRAFT_PORT` | `25565` | Local server port. |
-| `MINECRAFT_VERSION` | `1.21.8` | Server version used by Mineflayer. |
-| `MINECRAFT_USERNAME` | `MinecraftAgent` | Offline bot name. |
-| `RUNTIME_DIR` | `runtime` | Server files and verified progress. |
-| `CODEX_LB_BASE_URL` | `http://192.168.2.28:2455/backend-api/codex` | Codex-LB Responses endpoint. |
-| `CODEX_LB_MODEL` | `gpt-6-luna` | Planner model. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe choice endpoint. |
-| `TYPESAFE_MODEL` | `jev-latest` | TypeSafe model alias. |
-
-Runtime data, worlds, progress, logs, `.env`, and installed dependencies stay
-out of Git.
-
-## What the first slice proves
-
-The agent checks each chosen action against a fresh observation before saving
-progress. Its models select only from application-defined actions. This slice
-does not implement survival progression or claim a dragon victory.
-
-## Verification recorded on 2026-10-17
-
-<code>npm test</code> passed all 56 offline tests. The tests do not need
-provider credentials or a Minecraft server.
-
-The Codex-LB preflight sent a request to
-<code>http://192.168.2.28:2455/backend-api/codex</code>, but the SDK returned a
-<code>TypeError</code> without an HTTP status. Treat provider access as
-unverified.
-
-The published <a href="https://api.typesafe.ai/openapi.json">TypeSafe OpenAPI
-document</a> documents <code>POST /v1/systemone</code> and shows the
-<code>jev-latest</code> alias. This checkout has no
-<code>TYPESAFE_API_KEY</code>, so it did not test account access or model
-availability. The TypeSafe and full-agent smoke checks stopped before a
-provider request; the full-agent check also stopped before connecting to
-Minecraft.
-
-The Minecraft smoke command failed to connect. Java 21 is not installed in
-this checkout, and no manually configured server or accepted EULA is present.
-The advancement parser passed fixture tests, but this run did not verify the
-1.21.8 server's saved file layout or flush timing.
+| <code>PRISM_BRIDGE_TOKEN</code> | required | Shared 64-character local pairing token. |
+| <code>PANEL_PORT</code> | <code>8765</code> | Loopback decision panel port. |
+| <code>RUNTIME_DIR</code> | <code>runtime</code> | World files and verified progress. |
+| <code>CODEX_LB_BASE_URL</code> | <code>http://192.168.2.28:2455/backend-api/codex</code> | Codex-LB Responses endpoint. |
+| <code>CODEX_LB_MODEL</code> | <code>gpt-6-luna</code> | Planner model. |
+| <code>TYPESAFE_BASE_URL</code> | <code>https://api.typesafe.ai/v1/systemone</code> | TypeSafe choice endpoint. |
+| <code>TYPESAFE_MODEL</code> | <code>jev-latest</code> | TypeSafe model alias. |

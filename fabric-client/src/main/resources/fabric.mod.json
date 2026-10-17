@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "minecraft_agent_bridge",
+  "version": "${version}",
+  "name": "Prism Agent Bridge",
+  "description": "Loopback-only observation and bounded control for the active Minecraft client.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.wayne.minecraftagent.PrismBridgeClient"
+    ]
+  },
+  "mixins": [
+    "minecraft-agent.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.8",
+    "fabric-api": "*",
+    "java": ">=21"
+  }
+}

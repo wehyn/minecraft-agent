@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "dev.wayne.minecraftagent.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "GameRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

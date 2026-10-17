@@ -110,14 +110,14 @@ const definitions = {
     },
     cancel: cancelPath,
     verify(candidate, _before, after) {
-      const distance = Math.hypot(
-        candidate.target.x - after.position.x,
-        candidate.target.y - after.position.y,
-        candidate.target.z - after.position.z,
+      const distanceBlocks = Math.hypot(
+        Math.floor(candidate.target.x) - Math.floor(after.position.x),
+        Math.floor(candidate.target.y) - Math.floor(after.position.y),
+        Math.floor(candidate.target.z) - Math.floor(after.position.z),
       );
       return {
-        status: distance <= candidate.radius ? "passed" : "failed",
-        evidence: { distanceBlocks: distance },
+        status: distanceBlocks <= candidate.radius ? "passed" : "failed",
+        evidence: { distanceBlocks },
       };
     },
   },
@@ -128,6 +128,13 @@ export function buildCandidates(observation, _goal) {
     .map(definition => definition.build(observation))
     .filter(Boolean);
 }
+
+export const ACTION_IDS = Object.freeze(Object.keys(definitions));
+export const ACTION_CATALOG = Object.freeze(
+  Object.entries(definitions).map(([id, { description }]) =>
+    Object.freeze({ id, description }),
+  ),
+);
 
 function runWithDeadline(operation, timeoutMs, signal, cancel) {
   return new Promise((resolve, reject) => {
@@ -172,6 +179,14 @@ export function executeCandidate(bot, candidate, signal, adapters = {}) {
   const definition = definitions[candidate?.id];
   if (!definition || !Number.isFinite(candidate.timeoutMs)) {
     return Promise.reject(new Error("Unknown action candidate"));
+  }
+  if (typeof bot?.execute === "function") {
+    return runWithDeadline(
+      actionSignal => bot.execute(candidate, { ...adapters, signal: actionSignal }),
+      candidate.timeoutMs + 1_000,
+      signal,
+      () => bot.cancelAction?.(),
+    );
   }
   return runWithDeadline(
     actionSignal => definition.execute(bot, candidate, actionSignal, adapters),

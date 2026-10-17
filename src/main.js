@@ -7,32 +7,40 @@ import {
 } from "./advancement.js";
 import { runOneCycle, stopAgent } from "./agent.js";
 import { loadProgress, saveProgress } from "./progress.js";
-import { connectBot, observe } from "./minecraft/bot.js";
+import { connectPrismClient } from "./minecraft/prism-client.js";
+import { createDecisionPanel } from "./panel/server.js";
 import { createCodexClient, createPlanner } from "./providers/codex-lb.js";
 import { createJevProvider } from "./providers/typesafe-jev.js";
 
 const SAFE_ERRORS = new Set([
   "Missing CODEX_LB_API_KEY",
   "Missing TYPESAFE_API_KEY",
+  "Missing or invalid PRISM_BRIDGE_TOKEN",
   "Invalid progress file",
   "Invalid progress record",
   "Progress file unavailable",
   "Progress save failed",
   "Invalid player UUID",
-  "Invalid MINECRAFT_PORT",
-  "MINECRAFT_HOST must be 127.0.0.1",
   "Invalid CODEX_LB_BASE_URL",
   "Invalid TYPESAFE_BASE_URL",
   "Invalid required provider",
-  "Minecraft connection failed",
-  "Minecraft spawn timed out",
-  "Minecraft chunk load timed out",
+  "Incompatible Prism bridge",
+  "Prism connection aborted",
+  "Prism connection timed out",
+  "Prism bridge unavailable",
 ]);
 
 function safeError(error) {
   return SAFE_ERRORS.has(error?.message)
     ? error.message
     : "Agent stopped.";
+}
+
+function waitForStop(signal) {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    signal.addEventListener("abort", resolve, { once: true });
+  });
 }
 
 export async function runAgent({
@@ -55,17 +63,32 @@ export async function runAgent({
     throw new Error("Invalid progress record");
   }
 
-  let bot;
+  const panel = await createDecisionPanel({
+    port: config.panelPort,
+    onCancel: () => controller.abort(),
+  });
+  console.log("Decision panel: " + panel.url);
+
+  let driver;
   let checkpoint;
   let result;
   try {
-    bot = await connectBot(config, { signal: controller.signal });
-    const observation = observe(bot);
+    driver = await connectPrismClient(config.prism, {
+      signal: controller.signal,
+      onSnapshot: snapshot => panel.publish({
+        type: "observation",
+        sequence: snapshot.sequence,
+        frameRevision: snapshot.frameRevision,
+        observation: snapshot.observation,
+        frame: snapshot.frame,
+      }),
+    });
+    const initial = await driver.snapshot({ signal: controller.signal });
     const startedAt = progress.run.startedAt || new Date().toISOString();
     const run = {
       ...progress.run,
-      minecraftVersion: config.minecraft.version,
-      difficulty: progress.run.difficulty || observation.difficulty,
+      minecraftVersion: driver.session.minecraftVersion,
+      difficulty: progress.run.difficulty || initial.observation.difficulty,
       startedAt,
     };
     const currentProgress = { ...progress, run };
@@ -85,39 +108,51 @@ export async function runAgent({
     };
 
     result = await runOneCycle({
-      bot,
+      driver,
       planner,
       jev,
       progress: currentProgress,
       progressStore,
       signal: controller.signal,
+      publish: event => panel.publish(event),
     });
-  } finally {
-    await stopAgent({ bot, controller });
-  }
 
-  if (result.status !== "verified") return result;
-
-  let victory = "unknown";
-  try {
-    const advancementFile = advancementFileFor({
-      worldDir: config.minecraft.worldDir,
-      playerUuid: bot.player.uuid,
-    });
-    if (hasFreeTheEnd({ advancementFile, playerUuid: bot.player.uuid })) {
-      victory = "confirmed";
-      checkpoint = { ...checkpoint, victory };
-      await saveProgress(config.progressFile, checkpoint).catch(() => {});
+    if (result.status === "verified") {
+      let victory = "unknown";
+      try {
+        const advancementFile = advancementFileFor({
+          worldDir: config.minecraft.worldDir,
+          playerUuid: driver.session.playerUuid,
+        });
+        if (hasFreeTheEnd({ advancementFile, playerUuid: driver.session.playerUuid })) {
+          victory = "confirmed";
+          checkpoint = { ...checkpoint, victory };
+          await saveProgress(config.progressFile, checkpoint).catch(() => {});
+        }
+      } catch {
+        victory = "unknown";
+      }
+      panel.publish({ type: "victory", status: victory });
+      result = { ...result, victory };
     }
-  } catch {
-    victory = "unknown";
+
+    console.log(JSON.stringify({
+      status: result.status,
+      actionId: result.actionId,
+      reason: result.reason,
+      victory: result.victory,
+    }));
+    await waitForStop(controller.signal);
+    return result;
+  } finally {
+    await stopAgent({ driver, controller });
+    await panel.close();
   }
-  return { ...result, victory };
 }
 
 export async function main(args = process.argv.slice(2)) {
   if (args.length > 1 || (args.length === 1 && args[0] !== "smoke:agent")) {
-    console.error("Run one cycle with: npm run smoke:agent");
+    console.error("Run one Prism cycle with: npm start");
     process.exitCode = 2;
     return;
   }
@@ -128,21 +163,11 @@ export async function main(args = process.argv.slice(2)) {
   process.once("SIGTERM", onSignal);
   try {
     const result = await runAgent({ controller });
-    if (result.status !== "verified") {
-      console.error("Agent stopped: " + result.reason);
-      process.exitCode = 1;
-      return;
-    }
-    console.log(
-      JSON.stringify({
-        status: result.status,
-        actionId: result.actionId,
-        victory: result.victory,
-      }),
-    );
+    if (result.status !== "verified") process.exitCode = 1;
   } catch (error) {
     console.error(safeError(error));
     process.exitCode = 1;
+    controller.abort();
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
