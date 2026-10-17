@@ -137,16 +137,14 @@ export async function runOneCycle({
   }
 
   emit(publish, { type: "cycle", status: "verifying" });
-  let completionSnapshot;
   let afterSnapshot;
   try {
-    completionSnapshot = await readSnapshot(driver, bot, undefined, signal);
-    afterSnapshot = await readSnapshot(
-      driver,
-      bot,
-      completionSnapshot.sequence,
-      signal,
-    );
+    if (driver) {
+      const completionSnapshot = await readSnapshot(driver, bot, undefined, signal);
+      afterSnapshot = await readSnapshot(driver, bot, completionSnapshot.sequence, signal);
+    } else {
+      afterSnapshot = await readSnapshot(driver, bot, undefined, signal);
+    }
   } catch {
     return complete(stopped(signal?.aborted ? "aborted" : "observation_failed"), publish);
   }

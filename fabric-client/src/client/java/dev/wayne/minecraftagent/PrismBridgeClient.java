@@ -86,14 +86,13 @@ public final class PrismBridgeClient implements ClientModInitializer {
     });
     private final AtomicReference<String> cancelRequested = new AtomicReference<>();
     private final ConcurrentHashMap<String, JsonObject> receipts = new ConcurrentHashMap<>();
+    private final ObservationState observations = new ObservationState();
     private volatile String token;
     private boolean autoConnectLocalServer;
     private boolean joinAttempted;
     private boolean gameMenuLogged;
     private int initialMenuGraceTicks = INITIAL_MENU_GRACE_TICKS;
     private volatile String playerUuid;
-    private volatile JsonObject latestObservation;
-    private volatile long sequence;
     private volatile ActiveAction activeAction;
     private boolean ownsForwardKey;
     private HttpServer server;
@@ -214,7 +213,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
         JsonObject value = new JsonObject();
         value.addProperty("protocolVersion", 1);
         value.addProperty("minecraftVersion", "1.21.8");
-        value.addProperty("connected", latestObservation != null && playerUuid != null);
+        value.addProperty("connected", observations.current().observation() != null && playerUuid != null);
         if (playerUuid != null) value.addProperty("playerUuid", playerUuid);
         JsonArray ids = new JsonArray();
         ACTION_IDS.forEach(ids::add);
@@ -223,14 +222,11 @@ public final class PrismBridgeClient implements ClientModInitializer {
     }
 
     private JsonObject snapshot(String afterFrameRevision) {
-        JsonObject observation = latestObservation;
+        JsonObject value = observations.snapshotJson();
         CapturedFrame frame = latestFrame.get();
-        if (observation == null || frame == null || frame.jpeg().length < 4) return null;
-        JsonObject value = new JsonObject();
-        value.addProperty("sequence", sequence);
+        if (!value.has("observation") || frame == null || frame.jpeg().length < 4) return null;
         value.addProperty("frameRevision", frame.revision());
         value.addProperty("capturedAt", java.time.Instant.now().toString());
-        value.add("observation", observation.deepCopy());
         if (!Long.toString(frame.revision()).equals(afterFrameRevision)) {
             value.addProperty("frame", Base64.getEncoder().encodeToString(frame.jpeg()));
         }
@@ -252,8 +248,9 @@ public final class PrismBridgeClient implements ClientModInitializer {
             return;
         }
 
-        long currentSequence = sequence;
-        if (latestObservation == null || currentSequence - basedOnSequence < 0
+        ObservationState.Snapshot current = observations.current();
+        long currentSequence = current.sequence();
+        if (current.observation() == null || currentSequence - basedOnSequence < 0
                 || currentSequence - basedOnSequence > 2) {
             send(exchange, 409, error("stale_observation"));
             return;
@@ -328,7 +325,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
             ActionCommand queued = pendingAction.getAndSet(null);
             if (queued != null) finishQueued(queued, "failed", "client_not_ready");
             releaseControls(client);
-            latestObservation = null;
+            observations.clear();
             playerUuid = null;
             return;
         }
@@ -354,10 +351,9 @@ public final class PrismBridgeClient implements ClientModInitializer {
 
         if (++tickCounter % 10 == 0) {
             try {
-                latestObservation = observe(client);
-                sequence++;
+                observations.publish(observe(client));
             } catch (Exception error) {
-                latestObservation = null;
+                observations.clear();
             }
         }
     }
@@ -370,7 +366,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
                 finishQueued(command, "failed", "client_not_ready");
                 return;
             }
-            if (sequence - command.basedOnSequence > 2) {
+            if (observations.current().sequence() - command.basedOnSequence > 2) {
                 finishQueued(command, "failed", "stale_observation");
                 return;
             }
