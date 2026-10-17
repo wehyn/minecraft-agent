@@ -137,9 +137,16 @@ export async function runOneCycle({
   }
 
   emit(publish, { type: "cycle", status: "verifying" });
+  let completionSnapshot;
   let afterSnapshot;
   try {
-    afterSnapshot = await readSnapshot(driver, bot, beforeSnapshot.sequence, signal);
+    completionSnapshot = await readSnapshot(driver, bot, undefined, signal);
+    afterSnapshot = await readSnapshot(
+      driver,
+      bot,
+      completionSnapshot.sequence,
+      signal,
+    );
   } catch {
     return complete(stopped(signal?.aborted ? "aborted" : "observation_failed"), publish);
   }
