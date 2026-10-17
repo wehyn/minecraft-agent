@@ -76,11 +76,16 @@ export async function createDecisionPanel({ port = 8765, onCancel } = {}) {
     }
 
     if (request.method === "POST" && request.url === "/cancel") {
-      const expectedHost = "127.0.0.1:" + server.address().port;
-      const expectedOrigin = "http://" + expectedHost;
+      const port = server.address().port;
+      const expectedHosts = new Set([
+        `127.0.0.1:${port}`,
+        `localhost:${port}`,
+        ...(port === 80 ? ["127.0.0.1", "localhost"] : []),
+      ]);
+      const host = request.headers.host?.toLowerCase();
       if (
-        request.headers.host !== expectedHost ||
-        request.headers.origin !== expectedOrigin
+        !expectedHosts.has(host) ||
+        request.headers.origin !== "http://" + host
       ) {
         writeJson(response, 403, { error: "forbidden" });
         return;

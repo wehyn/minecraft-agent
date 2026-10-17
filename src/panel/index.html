@@ -272,9 +272,16 @@
       try { render(JSON.parse(event.data)); } catch {}
     };
     setInterval(updateFrameStatus, 100);
-    byId("stop").addEventListener("click", () => {
-      fetch("/cancel", { method: "POST" }).catch(() => {});
-      byId("stop").disabled = true;
+    const stopButton = byId("stop");
+    stopButton.addEventListener("click", async () => {
+      stopButton.disabled = true;
+      try {
+        const response = await fetch("/cancel", { method: "POST" });
+        if (!response.ok) throw new Error("Stop request failed");
+      } catch {
+        stopButton.disabled = false;
+        stopButton.textContent = "Stop request failed. Try again";
+      }
     });
     window.addEventListener("pagehide", () => {
       navigator.sendBeacon("/cancel", "");

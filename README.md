@@ -70,7 +70,8 @@ The panel receives the validated Codex goal, the exact choices sent to JEVi,
 JEVi's selected action ID, execution status, verifier evidence, and checkpoint
 result. It does not display hidden model reasoning or invent a rationale.
 Screenshots remain in memory and on loopback; they are not sent to providers or
-saved to disk.
+saved to disk. The panel has no authentication, so programs on the same computer
+can read its event stream and live frame.
 
 Codex and JEVi receive structured game observations and the bounded goal/action
 choices needed for their requests. They do not receive the screenshot. JEVi
