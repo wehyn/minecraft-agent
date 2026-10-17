@@ -1,0 +1,22 @@
+{
+  "name": "minecraft-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.js",
+    "smoke:agent": "node --env-file-if-exists=.env src/main.js smoke:agent",
+    "smoke:codex-lb": "node --env-file-if-exists=.env scripts/smoke-codex-lb.js",
+    "smoke:typesafe-jev": "node --env-file-if-exists=.env scripts/smoke-typesafe-jev.js",
+    "smoke:minecraft": "node --env-file-if-exists=.env scripts/smoke-minecraft.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mineflayer": "4.39.0",
+    "mineflayer-pathfinder": "2.4.5",
+    "openai": "7.36.0"
+  }
+}
