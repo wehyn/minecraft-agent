@@ -30,6 +30,13 @@ function portValue(value) {
   return port;
 }
 
+function panelPortValue(value) {
+  if (!/^\d+$/.test(String(value ?? "8765"))) throw new Error("Invalid PANEL_PORT");
+  const port = Number(value ?? 8765);
+  if (port < 1 || port > 65535) throw new Error("Invalid PANEL_PORT");
+  return port;
+}
+
 export function loadConfig(env = process.env, { requiredProvider } = {}) {
   if (requiredProvider !== undefined && !["codex", "typesafe"].includes(requiredProvider)) {
     throw new Error("Invalid required provider");
@@ -63,6 +70,11 @@ export function loadConfig(env = process.env, { requiredProvider } = {}) {
     typeSafeApiKey,
     runtimeDir,
     progressFile: path.join(runtimeDir, "progress.json"),
+    prism: {
+      baseUrl: "http://127.0.0.1:8766",
+      token: env.PRISM_BRIDGE_TOKEN || undefined,
+    },
+    panelPort: panelPortValue(env.PANEL_PORT),
     minecraft: {
       host,
       port: portValue(env.MINECRAFT_PORT),

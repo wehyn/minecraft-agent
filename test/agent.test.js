@@ -239,12 +239,16 @@ test("movement verifies the observed position against its requested radius", () 
   );
   const reached = {
     ...before,
-    position: { ...candidate.target },
+    position: {
+      x: candidate.target.x + 1.5,
+      y: candidate.target.y,
+      z: candidate.target.z,
+    },
   };
   const outsideRadius = {
     ...before,
     position: {
-      x: candidate.target.x + 2,
+      x: candidate.target.x + 2.5,
       y: candidate.target.y,
       z: candidate.target.z,
     },
@@ -252,7 +256,7 @@ test("movement verifies the observed position against its requested radius", () 
 
   assert.deepEqual(verifyCandidate(candidate, before, reached), {
     status: "passed",
-    evidence: { distanceBlocks: 0 },
+    evidence: { distanceBlocks: 1 },
   });
   assert.deepEqual(verifyCandidate(candidate, before, outsideRadius), {
     status: "failed",

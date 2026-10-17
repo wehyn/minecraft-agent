@@ -28,6 +28,10 @@ const choice = {
   parameters: { ticks: 20 },
 };
 
+async function* responseEvents(events) {
+  yield* events;
+}
+
 test("Codex-LB client disables SDK retries and sets the request timeout", () => {
   const config = loadConfig({ CODEX_LB_API_KEY: "codex-test-key" });
   const client = createCodexClient(config);
@@ -40,15 +44,18 @@ test("Codex-LB client disables SDK retries and sets the request timeout", () => 
 test("planner returns a bounded goal and sends one bounded Responses request", async () => {
   let request;
   let options;
+  const outputText =
+    '{"objective":"Wait safely","successCriteria":["Observe at least 20 game ticks"]}';
   const client = {
     responses: {
       create: async (body, requestOptions) => {
         request = body;
         options = requestOptions;
-        return {
-          output_text:
-            '{"objective":"Wait safely","successCriteria":["Observe at least 20 game ticks"]}',
-        };
+        return responseEvents([
+          { type: "response.output_text.delta", delta: outputText },
+          { type: "response.metadata" },
+          { type: "response.completed" },
+        ]);
       },
     },
   };
@@ -57,6 +64,7 @@ test("planner returns a bounded goal and sends one bounded Responses request", a
 
   assert.deepEqual(await planner.plan({ observation, progress: {} }), goal);
   assert.equal(request.model, "gpt-6-luna");
+  assert.equal(request.stream, true);
   assert.deepEqual(request.reasoning, { effort: "max" });
   assert.equal(request.service_tier, "default");
   assert.equal(options.timeout, 60_000);
@@ -73,7 +81,10 @@ test("planner rejects malformed and action-bearing output", async () => {
       config: loadConfig({ CODEX_LB_API_KEY: "codex-test-key" }),
       client: {
         responses: {
-          create: async () => ({ output_text }),
+          create: async () => responseEvents([
+            { type: "response.output_text.delta", delta: output_text },
+            { type: "response.completed" },
+          ]),
         },
       },
     });
@@ -93,13 +104,18 @@ test("planner cancels an in-flight request when the cycle is aborted", async () 
       responses: {
         create: async (_body, options) => {
           requestSignal = options.signal;
-          return new Promise((_resolve, reject) => {
-            options.signal.addEventListener(
-              "abort",
-              () => reject(new Error("aborted")),
-              { once: true },
-            );
-          });
+          return {
+            async *[Symbol.asyncIterator]() {
+              if (options.signal.aborted) throw new Error("aborted");
+              await new Promise((_resolve, reject) => {
+                options.signal.addEventListener(
+                  "abort",
+                  () => reject(new Error("aborted")),
+                  { once: true },
+                );
+              });
+            },
+          };
         },
       },
     },

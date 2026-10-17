@@ -21,13 +21,25 @@ function offeredChoices(candidates) {
   return choices;
 }
 
+function validatedProbabilities(value, choices) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return null;
+  const ids = choices.map(({ id }) => id);
+  const keys = Object.keys(value);
+  if (keys.length !== ids.length || keys.some(id => !ids.includes(id))) return null;
+  const probabilities = Object.fromEntries(ids.map(id => [id, value[id]]));
+  const values = Object.values(probabilities);
+  if (values.some(score => !Number.isFinite(score) || score < 0 || score > 1)) return null;
+  if (Math.abs(values.reduce((sum, score) => sum + score, 0) - 1) > 0.01) return null;
+  return probabilities;
+}
+
 export function createJevProvider({
   config,
   fetchImpl = fetch,
   timeoutSignal = milliseconds => AbortSignal.timeout(milliseconds),
 }) {
   return {
-    async chooseAction({ observation, goal, candidates, signal }) {
+    async chooseAction({ observation, goal, candidates, signal, onDecision }) {
       if (!config.typeSafeApiKey) throw new Error("Missing TYPESAFE_API_KEY");
       if (signal?.aborted) throw new Error("TypeSafe request failed");
       const choices = offeredChoices(candidates);
@@ -71,6 +83,13 @@ export function createJevProvider({
         !choices.some(choice => choice.id === answer.choice)
       ) {
         throw new Error("Invalid TypeSafe action choice");
+      }
+      try {
+        onDecision?.({
+          selectedId: answer.choice,
+          probabilities: validatedProbabilities(answer.probabilities, choices),
+        });
+      } catch {
       }
       return answer.choice;
     },

@@ -10,6 +10,7 @@ import {
 
 function fakeBot() {
   const bot = new EventEmitter();
+  bot._client = new EventEmitter();
   const positions = [];
   for (let x = -2; x <= 2; x++) {
     for (let z = -2; z <= 2; z++) positions.push({ x, y: 64, z });
@@ -77,6 +78,32 @@ test("observe rejects missing required game state", () => {
   bot.health = undefined;
 
   assert.throws(() => observe(bot), /Invalid Minecraft observation/);
+});
+
+test("connect normalizes numeric and named difficulty packets for observation", async () => {
+  const bot = fakeBot();
+  bot.game.difficulty = undefined;
+  const connecting = connectBot(loadConfig({}), {
+    mineflayerImpl: { createBot: () => bot },
+  });
+  bot.emit("spawn");
+  await connecting;
+  bot._client.on("difficulty", ({ difficulty }) => {
+    bot.game.difficulty = ["peaceful", "easy", "normal", "hard"][difficulty];
+  });
+
+  try {
+    for (const [difficulty, expected] of [
+      ["normal", "normal"],
+      [2, "normal"],
+      [0, "peaceful"],
+    ]) {
+      bot._client.emit("difficulty", { difficulty });
+      assert.equal(observe(bot).difficulty, expected);
+    }
+  } finally {
+    await disconnect(bot);
+  }
 });
 
 test("connect waits for spawn and chunks with loopback offline settings", async () => {

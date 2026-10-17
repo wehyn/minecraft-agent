@@ -32,14 +32,16 @@ export function createCodexClient(config) {
 export function createPlanner({ config, client = createCodexClient(config) }) {
   return {
     async plan({ observation, progress, signal }) {
-      let response;
+      let outputText = "";
+      let completed = false;
       try {
         if (signal?.aborted) throw new Error();
-        response = await client.responses.create(
+        const responseStream = await client.responses.create(
           {
             model: config.codexModel,
             reasoning: { effort: "max" },
             service_tier: "default",
+            stream: true,
             input: [
               "Return one JSON object with exactly objective and successCriteria.",
               "Do not include actions, action names, parameters, coordinates, or code.",
@@ -49,10 +51,23 @@ export function createPlanner({ config, client = createCodexClient(config) }) {
           },
           { timeout: REQUEST_TIMEOUT_MS, maxRetries: 0, signal },
         );
+        for await (const event of responseStream) {
+          if (event?.type === "response.output_text.delta") {
+            if (typeof event.delta !== "string") throw new Error();
+            outputText += event.delta;
+          } else if (event?.type === "response.completed") {
+            completed = true;
+          } else if (
+            ["response.failed", "response.incomplete", "error"].includes(event?.type)
+          ) {
+            throw new Error();
+          }
+        }
+        if (!completed) throw new Error();
       } catch {
         throw new Error("Codex-LB request failed");
       }
-      return parseGoal(response?.output_text);
+      return parseGoal(outputText);
     },
   };
 }

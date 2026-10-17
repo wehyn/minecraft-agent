@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prism Agent Live</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101410;
+      --panel: #171d18;
+      --panel-2: #1e2820;
+      --line: #303c31;
+      --text: #ecf2e7;
+      --muted: #9ba996;
+      --accent: #b8ef73;
+      --warn: #ffce7a;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); }
+    header {
+      height: 62px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 22px; border-bottom: 1px solid var(--line); background: #121812;
+    }
+    .brand { display: flex; gap: 12px; align-items: center; letter-spacing: .04em; font-weight: 750; }
+    .mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #17220e; font-size: 15px; }
+    .subtitle, .eyebrow, .meta { color: var(--muted); font-size: 11px; letter-spacing: .13em; text-transform: uppercase; }
+    .connection { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7666; }
+    .dot.live { background: var(--accent); box-shadow: 0 0 12px #b8ef7380; }
+    main { min-height: calc(100vh - 62px); display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(340px, .95fr); gap: 16px; padding: 16px; }
+    .view, .rail { min-width: 0; }
+    .view { display: flex; flex-direction: column; gap: 12px; }
+    .frame { position: relative; min-height: 300px; flex: 1; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #080b09; }
+    .frame img { display: block; width: 100%; height: 100%; min-height: 300px; max-height: calc(100vh - 158px); object-fit: contain; }
+    .placeholder { padding: 24px; color: var(--muted); text-align: center; }
+    .frame-tag { position: absolute; left: 14px; top: 14px; padding: 7px 10px; border: 1px solid #ffffff25; border-radius: 7px; background: #0d120dbf; backdrop-filter: blur(10px); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .frame-tag.stale { color: var(--warn); border-color: #ffce7a70; }
+    .coordinates { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .rail { display: flex; flex-direction: column; gap: 12px; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 15px; background: var(--panel); }
+    h1, h2, p { margin: 0; }
+    h1 { margin: 8px 0 9px; font-size: 18px; line-height: 1.3; }
+    h2 { margin: 0 0 11px; font-size: 13px; }
+    .criteria { display: flex; flex-direction: column; gap: 6px; color: #c5d0be; font-size: 12px; }
+    .criteria div::before { content: "✓"; padding-right: 8px; color: var(--accent); }
+    .options { display: flex; flex-direction: column; gap: 7px; }
+    .option { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 38px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: #c3cec0; font-size: 12px; }
+    .option.selected { border-color: #b8ef7370; background: #b8ef7312; color: var(--text); }
+    .choice-dot { width: 7px; height: 7px; flex: 0 0 auto; border: 1px solid #71806a; border-radius: 50%; }
+    .option.selected .choice-dot { border-color: var(--accent); background: var(--accent); }
+    .option-detail { display: grid; gap: 5px; }
+    .option-meta { color: var(--muted); font-size: 10px; }
+    .score { min-width: 88px; text-align: right; font-variant-numeric: tabular-nums; }
+    .score.unavailable { color: var(--muted); font-size: 10px; }
+    .score-bar { display: block; width: 88px; height: 3px; margin-left: auto; overflow: hidden; border-radius: 3px; background: var(--line); }
+    .score-bar span { display: block; height: 100%; background: var(--accent); }
+    .status { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12px; }
+    .value { color: var(--accent); font-weight: 650; text-align: right; }
+    .evidence { padding-top: 9px; color: #c2d0bd; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .timeline { display: flex; flex-direction: column; gap: 9px; max-height: 170px; overflow: auto; }
+    .entry { display: grid; grid-template-columns: 9px 1fr; gap: 8px; color: #b8c4b3; font-size: 11px; line-height: 1.45; }
+    .entry::before { content: ""; width: 5px; height: 5px; margin-top: 5px; border-radius: 50%; background: #71806a; }
+    .entry:first-child::before { background: var(--accent); }
+    .actions { display: flex; justify-content: flex-end; }
+    button { border: 1px solid #61704f; border-radius: 8px; padding: 9px 13px; background: #26351f; color: var(--text); font-weight: 650; cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    .footnote { color: var(--muted); font-size: 10px; line-height: 1.4; }
+    @media (max-width: 850px) {
+      main { grid-template-columns: 1fr; }
+      .frame { min-height: 260px; }
+      .frame img { min-height: 260px; max-height: 58vh; }
+      .rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .card:last-of-type, .actions, .footnote { grid-column: 1 / -1; }
+    }
+    @media (max-width: 560px) {
+      header { padding: 0 14px; }
+      main { padding: 10px; }
+      .rail { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="mark">✦</span><span>PRISM AGENT <span class="subtitle">/ LIVE</span></span></div>
+    <div class="connection"><span id="dot" class="dot"></span><span id="prism">Waiting for Prism</span><span class="meta">1.21.8</span></div>
+  </header>
+  <main>
+    <section class="view" aria-label="Prism player's point of view">
+      <div class="frame">
+        <img id="frame" alt="Live first-person view from the Prism Minecraft client" hidden>
+        <div id="placeholder" class="placeholder">Waiting for the 1.21.8 client bridge…</div>
+        <div id="frame-tag" class="frame-tag stale">Prism POV · stale</div>
+      </div>
+      <div class="coordinates"><span id="position">Player position unavailable</span><span id="dimension">World unavailable</span><span id="fps">0 fps</span></div>
+    </section>
+    <aside class="rail" aria-label="Agent decisions">
+      <section class="card">
+        <div class="eyebrow">Codex goal</div>
+        <h1 id="goal">Waiting for the planner</h1>
+        <div id="criteria" class="criteria"></div>
+      </section>
+      <section class="card">
+        <h2>JEVi options</h2>
+        <div id="options" class="options"><div class="option">Waiting for validated choices</div></div>
+      </section>
+      <section class="card">
+        <h2>Chosen action</h2>
+        <div class="status"><span id="selected">No choice yet</span><span id="execution" class="value">Idle</span></div>
+      </section>
+      <section class="card">
+        <h2>Independent verification</h2>
+        <div class="status"><span id="verification">Pending</span><span id="checkpoint" class="value"></span></div>
+        <div id="evidence" class="evidence"></div>
+      </section>
+      <section class="card">
+        <h2>Live event trace</h2>
+        <div id="timeline" class="timeline"><div class="entry">Waiting for a Prism snapshot.</div></div>
+      </section>
+      <div class="actions"><button id="stop">Stop agent and close panel</button></div>
+      <p class="footnote">The panel shows the validated goal, offered actions, JEVi's selected ID, execution status, and observed evidence. It does not expose private model reasoning.</p>
+    </aside>
+  </main>
+  <script>
+    const byId = id => document.getElementById(id);
+    const source = new EventSource("/events");
+    let lastFrame = 0;
+    let lastFrameAt = 0;
+    const frameTimes = [];
+
+    function updateFrameStatus() {
+      const now = performance.now();
+      while (frameTimes.length && frameTimes[0] <= now - 1000) frameTimes.shift();
+      byId("fps").textContent = frameTimes.length + " fps";
+      const stale = !lastFrameAt || now - lastFrameAt >= 1000;
+      byId("frame-tag").classList.toggle("stale", stale);
+      byId("frame-tag").textContent = "Prism POV · " + (stale ? "stale" : "live");
+    }
+
+    function validScores(scores, choices) {
+      if (!scores || Object.getPrototypeOf(scores) !== Object.prototype) return null;
+      const ids = choices.map(({ id }) => id);
+      const keys = Object.keys(scores);
+      if (keys.length !== ids.length || keys.some(id => !ids.includes(id))) return null;
+      const values = ids.map(id => scores[id]);
+      if (values.some(value => !Number.isFinite(value) || value < 0 || value > 1)) return null;
+      if (Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) > 0.01) return null;
+      return scores;
+    }
+
+    function percentageValues(scores, choices) {
+      const total = choices.reduce((sum, choice) => sum + scores[choice.id], 0);
+      const parts = choices.map(({ id }, index) => {
+        const exactTenths = scores[id] * 1000 / total;
+        const tenths = Math.floor(exactTenths);
+        return { id, index, tenths, remainder: exactTenths - tenths };
+      });
+      const remaining = 1000 - parts.reduce((sum, part) => sum + part.tenths, 0);
+      const ranked = [...parts].sort((left, right) => right.remainder - left.remainder || left.index - right.index);
+      for (let index = 0; index < remaining; index++) ranked[index].tenths++;
+      return Object.fromEntries(parts.map(({ id, tenths }) => [id, tenths / 10]));
+    }
+
+    function render(state) {
+      byId("dot").classList.toggle("live", state.prism === "connected");
+      byId("prism").textContent = state.prism === "connected" ? "Prism connected" : "Waiting for Prism";
+
+      const observation = state.observation;
+      if (observation) {
+        const p = observation.position;
+        byId("position").textContent = "XYZ  " + [p.x, p.y, p.z].map(value => Number(value).toFixed(1)).join("  ");
+        byId("dimension").textContent = observation.dimension + "  ·  " + observation.difficulty;
+      }
+      if (state.frameRevision && state.frameRevision !== lastFrame) {
+        lastFrame = state.frameRevision;
+        lastFrameAt = performance.now();
+        frameTimes.push(lastFrameAt);
+        byId("frame").src = "/frame.jpg?v=" + lastFrame;
+        byId("frame").hidden = false;
+        byId("placeholder").hidden = true;
+      }
+
+      if (state.goal) {
+        byId("goal").textContent = state.goal.objective;
+        const criteria = byId("criteria");
+        criteria.replaceChildren();
+        for (const item of state.goal.successCriteria || []) {
+          const row = document.createElement("div");
+          row.textContent = item;
+          criteria.append(row);
+        }
+      }
+
+      const options = byId("options");
+      if (state.catalog?.length) {
+        options.replaceChildren();
+        const offered = new Set((state.options || []).map(option => option.id));
+        const scores = validScores(state.probabilities, state.options || []);
+        const percentages = scores ? percentageValues(scores, state.options || []) : null;
+        for (const option of state.catalog) {
+          const isOffered = offered.has(option.id);
+          const score = isOffered ? percentages?.[option.id] : undefined;
+          const row = document.createElement("div");
+          row.className = "option" + (option.id === state.selectedActionId ? " selected" : "");
+          const dot = document.createElement("span");
+          dot.className = "choice-dot";
+          const detail = document.createElement("span");
+          detail.className = "option-detail";
+          const label = document.createElement("span");
+          label.textContent = option.description + "  ·  " + option.id;
+          const availability = document.createElement("span");
+          availability.className = "option-meta";
+          availability.textContent = isOffered ? "Offered" : "Unavailable";
+          detail.append(label, availability);
+          const scoreView = document.createElement("span");
+          scoreView.className = "score";
+          if (!isOffered || score === undefined) {
+            scoreView.classList.add("unavailable");
+            scoreView.textContent = isOffered ? "Scores unavailable" : "";
+          } else {
+            scoreView.textContent = score.toFixed(1) + "%";
+            const bar = document.createElement("span");
+            bar.className = "score-bar";
+            const fill = document.createElement("span");
+            fill.style.width = score + "%";
+            bar.append(fill);
+            scoreView.append(bar);
+          }
+          row.append(dot, detail, scoreView);
+          options.append(row);
+        }
+      }
+      byId("selected").textContent = state.selectedActionId || "No choice yet";
+      byId("execution").textContent = state.execution?.status || state.cycle || "Idle";
+      byId("verification").textContent = state.verification?.status || "Pending";
+      byId("checkpoint").textContent = state.checkpoint || "";
+      byId("evidence").textContent = state.verification?.evidence
+        ? JSON.stringify(state.verification.evidence)
+        : state.result?.reason || "";
+      const timeline = byId("timeline");
+      timeline.replaceChildren();
+      for (const item of [...(state.timeline || [])].reverse()) {
+        const row = document.createElement("div");
+        row.className = "entry";
+        row.textContent = describe(item);
+        timeline.append(row);
+      }
+      if (!timeline.childElementCount) {
+        const row = document.createElement("div");
+        row.className = "entry";
+        row.textContent = "Waiting for a Prism snapshot.";
+        timeline.append(row);
+      }
+      updateFrameStatus();
+    }
+
+    function describe(event) {
+      if (event.type === "cycle") return "Cycle " + event.status;
+      if (event.type === "goal") return "Codex validated the goal: " + event.goal.objective;
+      if (event.type === "options") return "JEVi received " + event.choices.length + " app-owned choices";
+      if (event.type === "selection") return "JEVi selected " + event.selectedId;
+      if (event.type === "execution") return event.selectedId + " is " + event.status;
+      if (event.type === "verification") return event.selectedId + " verification " + event.status + " · " + JSON.stringify(event.evidence);
+      if (event.type === "checkpoint") return "Progress checkpoint " + event.status;
+      if (event.type === "result") return event.status === "verified" ? "Cycle verified" : "Cycle stopped: " + (event.reason || "unknown");
+      if (event.type === "victory") return "Advancement check " + event.status;
+      return event.type;
+    }
+
+    source.onmessage = event => {
+      try { render(JSON.parse(event.data)); } catch {}
+    };
+    setInterval(updateFrameStatus, 100);
+    byId("stop").addEventListener("click", () => {
+      fetch("/cancel", { method: "POST" }).catch(() => {});
+      byId("stop").disabled = true;
+    });
+    window.addEventListener("pagehide", () => {
+      navigator.sendBeacon("/cancel", "");
+    });
+  </script>
+</body>
+</html>

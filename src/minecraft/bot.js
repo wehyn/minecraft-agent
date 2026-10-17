@@ -2,6 +2,7 @@ import mineflayer from "mineflayer";
 
 const MAX_NEARBY_BLOCKS = 16;
 const NEARBY_BLOCK_RADIUS = 8;
+const DIFFICULTY_NAMES = ["peaceful", "easy", "normal", "hard"];
 const CONNECT_TIMEOUT_MS = 45_000;
 const DISCONNECT_TIMEOUT_MS = 2_000;
 const WALK_DIRECTIONS = [
@@ -27,6 +28,7 @@ const WALK_HAZARDS = new Set([
 const failedBots = new WeakSet();
 const endedBots = new WeakSet();
 const disconnects = new WeakMap();
+const difficultyByBot = new WeakMap();
 const configuredPathfinders = new WeakSet();
 
 function waitForEvent(bot, eventName, timeoutMs, signal, timeoutMessage) {
@@ -147,6 +149,7 @@ export function observe(bot) {
     const entity = bot?.entity;
     const position = entity?.position;
     const inventory = bot?.inventory?.items?.();
+    const difficulty = difficultyByBot.get(bot) ?? bot?.game?.difficulty;
     if (
       failedBots.has(bot) ||
       !finitePosition(position) ||
@@ -157,7 +160,7 @@ export function observe(bot) {
       !Number.isFinite(entity.yaw) ||
       !Number.isFinite(entity.pitch) ||
       typeof bot.game?.dimension !== "string" ||
-      typeof bot.game?.difficulty !== "string" ||
+      typeof difficulty !== "string" ||
       !Array.isArray(inventory)
     ) {
       throw new Error();
@@ -221,7 +224,7 @@ export function observe(bot) {
       dimension: bot.game.dimension,
       health: bot.health,
       food: bot.food,
-      difficulty: bot.game.difficulty,
+      difficulty,
       inventory: inventorySummary,
       tick: bot.time.age,
       yaw: entity.yaw,
@@ -252,6 +255,13 @@ export async function connectBot(
       auth: config.minecraft.auth,
       logErrors: false,
       hideErrors: true,
+    });
+    bot._client.on("difficulty", ({ difficulty }) => {
+      const name =
+        typeof difficulty === "string"
+          ? difficulty
+          : DIFFICULTY_NAMES[difficulty];
+      if (DIFFICULTY_NAMES.includes(name)) difficultyByBot.set(bot, name);
     });
     bot.on("error", () => failedBots.add(bot));
     bot.on("end", () => {
