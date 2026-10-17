@@ -1,0 +1,62 @@
+# Prism Live Viewer and Decision Distribution Design
+
+**Status:** Approved in chat for design drafting; awaiting owner review of this document.
+
+## Goal
+
+Update Prism Agent Live so Wayne can watch the actual Prism 1.21.8 client with its complete visible HUD and see every action JEVi considered, the probability for each offered action, and the selected action highlighted as the decision arrives. Target 60 displayed frames per second when the Prism client and host can sustain that rate, and report the measured rate instead of implying that dropped or repeated frames are new frames.
+
+## Current behavior
+
+- The Fabric bridge captures from `WorldRenderEvents.END` at most every 500 ms. The capture is before the HUD layer, so the panel omits the hotbar and status bars.
+- The Node bridge polls the Prism HTTP endpoint every 500 ms. The panel receives state with SSE and fetches one JPEG per changed frame.
+- JEVi receives application-owned action candidates and returns a selected ID. Its adapter currently discards provider score fields. The local provider fixture includes a `probabilities` map, but this is not yet validated as a live response contract.
+- The supported action catalog is `wait_20_ticks`, `look_at_observed_block`, and `move_near_observed_position`. Candidate availability depends on the current observation.
+
+## Approved design
+
+### Prism POV and frame rate
+
+Capture the completed Prism client frame after HUD rendering so the image includes the first-person view and the HUD elements Minecraft currently displays, including hotbar, health, hunger, armor, crosshair, and status effects where applicable. Continue using the already-open Prism client; do not add a second game connection.
+
+Raise the local capture and bridge polling cadence to a 60 fps target. Keep only the newest frame at each boundary and drop intermediate frames if capture, JPEG encoding, transfer, or browser rendering falls behind. Do not queue frames or replay stale images. Measure unique frame updates delivered to the panel over a rolling one-second interval and display the measured fps. The target is capped by the actual Prism render rate, browser display refresh, and host performance; the UI must show a lower measured rate when any of those limits prevent 60 fps.
+
+Keep screenshots on loopback. Preserve the current JPEG frame size and quality unless live performance evidence requires reducing them. Keep agent decisions on the existing SSE state channel; when a new frame revision arrives, the page fetches that version from the existing local `/frame.jpg` endpoint. Do not add a remote service, another transport dependency, or direct browser access to the Prism bridge.
+
+### JEVi choices and probabilities
+
+Show the full supported action catalog and mark each action as offered or unavailable in the current decision. For every offered action, show the provider-returned probability as a percentage. Highlight the selected action as soon as JEVi's response is accepted.
+
+Accept a probability distribution only when it has exactly one value for each offered ID, no other IDs, every value is finite and between 0 and 1, and the values sum to 1 within a small rounding tolerance. Convert a valid distribution to percentages totaling 100%. If the field is missing or invalid, label scores unavailable; never infer unreturned scores from the selected ID or scalar confidence. Continue validating the selected ID against the offered actions before any action can execute. Scores affect display only and cannot alter execution.
+
+Preserve the existing Codex goal, event trace, execution state, independent verification, and checkpoint display. Do not expose hidden model reasoning or send POV frames to Codex-LB or JEVi.
+
+## Data flow
+
+1. The Prism client captures a post-HUD frame at the render boundary, capped at 60 fps.
+2. A latest-frame buffer replaces older frames; slow consumers cause drops, not a growing queue.
+3. The Node process polls the loopback Prism bridge at the target cadence and publishes each newest unique frame revision through the existing SSE state. The page fetches that revision from the existing versioned JPEG endpoint.
+4. The agent passes JEVi's returned probability map through the provider boundary only after validating its IDs and values. The panel joins scores to the offered action IDs and highlights the validated selected ID.
+
+## Failure behavior
+
+- If Prism renders below 60 fps, display the measured lower rate.
+- If frame encoding or transfer falls behind, drop frames and continue with the newest frame; do not delay gameplay or action verification to drain a queue.
+- If the client disconnects, mark the POV stale or disconnected rather than presenting the last frame as live.
+- If JEVi omits scores or returns an invalid map, keep the selected action and decision trace visible while marking percentages unavailable. An invalid action ID still stops before execution.
+
+## Acceptance criteria
+
+1. The panel displays a live image captured from the actual Prism client, including its visible HUD elements.
+2. A measured frame-rate indicator reflects unique frames received by the panel. With Prism rendering at 60 fps and the panel visible on a capable host, the stream targets 60 fps; under load it drops frames and reports the lower rate.
+3. The panel lists every supported action, shows which actions were offered for the current observation, and displays valid per-choice probabilities for all offered actions.
+4. The selected action is highlighted when JEVi's response arrives. Missing or invalid scores are visibly unavailable and never fabricated.
+5. The existing bounded action validation and execution path remains authoritative; probabilities are display data only.
+6. POV frames remain local and hidden model reasoning remains private.
+
+## Out of scope
+
+- Adding gameplay actions, changing the goal/action policy, or running a continuous gameplay loop.
+- Historical action-frequency charts, scalar-confidence substitution, or fabricated percentages.
+- Sending screenshots to a model, adding remote access, or opening the Minecraft bridge beyond loopback.
+- Guaranteeing 60 fps when the game, browser, display, or host cannot render at that rate.
