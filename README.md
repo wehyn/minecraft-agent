@@ -1,14 +1,14 @@
 # Control the Prism Minecraft client with Codex and JEVi
 
 This app controls the player already running in Prism Launcher. A small Fabric
-client mod reads the live world and framebuffer, then accepts only the three
-bounded action IDs defined by this app. It never starts a second Minecraft
+client mod reads the live world and framebuffer, then accepts only the eight
+fixed action IDs defined by this app. It never starts a second Minecraft
 connection or closes Prism.
 
-The first run performs one cycle: Codex returns a validated goal, JEVi selects
-from the exact app-owned choices, the Prism player performs the selected action,
-and Node verifies the result from a fresh observation. A local panel shows the
-current POV and each validated step.
+The agent repeats the cycle after each verified action and saved checkpoint.
+Codex returns a validated goal. JEVi picks from the app's fixed choices. The
+Prism player acts, then Node checks the result in a fresh observation. A local
+panel shows the live POV and each step.
 
 ## Install the Prism bridge
 
@@ -56,9 +56,18 @@ npm start
 
 The app prints the local panel URL, normally
 <code>http://127.0.0.1:8765/</code>. It waits for the authenticated Prism
-client, then runs exactly one action cycle. The panel Stop button cancels the
-action, releases bridge-owned keys, and closes the local controller. Prism stays
-open. Press Ctrl-C for the same cleanup.
+client, then continues through verified action cycles. Each cycle starts with a
+fresh observation and the latest saved progress. Only a verified action with a
+saved checkpoint can start another cycle.
+
+The panel Stop button cancels the current provider or action request, releases
+bridge-owned keys, and stops future cycles. It closes the local controller, but
+Prism stays open. Press Ctrl-C for the same cleanup. The agent also stops after
+an aborted, failed, invalid, unverified, or checkpoint-failed cycle, or after
+the server confirms the <code>Free the End</code> advancement. An unknown
+advancement status does not count as victory.
+After a terminal result, the panel stays open for inspection until you press
+Stop or Ctrl-C.
 
 Use <code>npm run smoke:minecraft</code> to attach read-only to the already-open
 Prism player and print a small state summary. It does not create a Minecraft
@@ -67,7 +76,7 @@ player.
 ## Live panel and provider boundary
 
 The panel receives the validated Codex goal, the exact choices sent to JEVi,
-JEVi's selected action ID, execution status, verifier evidence, and checkpoint
+JEVi's selected choice ID, execution status, verifier evidence, and checkpoint
 result. It does not display hidden model reasoning or invent a rationale.
 Screenshots remain in memory and on loopback; they are not sent to providers or
 saved to disk. The panel has no authentication, so programs on the same computer
@@ -86,11 +95,25 @@ postcondition. The advancement check reads
 connected Prism player. If the local server uses a different world directory or
 player identity, victory remains unknown.
 
-The bridge accepts only <code>wait_20_ticks</code>,
-<code>look_at_observed_block</code>, and
-<code>move_near_observed_position</code>. It does not break/place blocks, jump,
-sprint, chat, manipulate inventory, or accept model-authored parameters.
-Movement is short, rechecks a clear supported path, stops for manual input, and
+The bridge accepts only these fixed action IDs:
+
+- <code>wait_20_ticks</code> waits for 20 observed ticks.
+- <code>look_at_observed_block</code> faces a nearby observed block.
+- <code>move_near_observed_position</code> walks a clear, supported one- or
+  two-block path. A one-block target requires exact block arrival.
+- <code>resume_game</code> closes the Game Menu. Other open screens block actions.
+- <code>mine_observed_log</code> breaks a nearby observed log-tag block in the
+  Overworld and waits for its drop to enter the inventory.
+- <code>craft_planks_from_logs</code> crafts four planks from one carried log.
+- <code>craft_sticks_from_planks</code> crafts four sticks from two planks.
+- <code>craft_table_from_planks</code> crafts one table from four planks.
+
+JEVi's choice list contains only app-owned IDs and descriptions. Each safe
+cardinal direction appears as a separate movement choice. The app rebuilds its
+target from the fresh observation, so JEVi cannot supply coordinates. The bridge
+checks targets, item tags, and inventory before acting, then verifies each
+result. The agent does not accept arbitrary mining, placement, combat, inventory
+disposal, or unrestricted navigation. Movement stops for manual input and
 releases its forward key on every terminal path. The mod enforces its own action
 deadline if the Node process disappears.
 

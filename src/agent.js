@@ -11,12 +11,36 @@ function stopped(reason, extra = {}) {
   return { status: "stopped", reason, ...extra };
 }
 
+export async function runCyclesUntilStopped({ progress, runCycle, signal }) {
+  let latestProgress = progress;
+  if (latestProgress?.victory === "confirmed") {
+    return { status: "verified", victory: "confirmed", progress: latestProgress };
+  }
+  while (!signal?.aborted) {
+    const result = await runCycle(latestProgress);
+    if (signal?.aborted) {
+      return result.status === "stopped"
+        ? result
+        : stopped("aborted", { progress: result.progress ?? latestProgress });
+    }
+    if (result.status !== "verified" || result.victory === "confirmed") {
+      return result;
+    }
+    latestProgress = result.progress ?? latestProgress;
+  }
+  return stopped("aborted", { progress: latestProgress });
+}
+
 function emit(publish, event) {
   try {
     publish?.(event);
   } catch {
     return;
   }
+}
+
+function choiceId(candidate) {
+  return candidate.choiceId ?? candidate.id;
 }
 
 function complete(result, publish) {
@@ -75,7 +99,10 @@ export async function runOneCycle({
   emit(publish, { type: "goal", goal: currentGoal });
 
   const offered = buildCandidates(observation, currentGoal);
-  const choices = offered.map(({ id, description }) => ({ id, description }));
+  const choices = offered.map(candidate => ({
+    id: choiceId(candidate),
+    description: candidate.description,
+  }));
   emit(publish, { type: "options", provider: "JEVi", catalog: ACTION_CATALOG, choices });
   emit(publish, { type: "cycle", status: "choosing" });
   let selectedId;
@@ -93,7 +120,7 @@ export async function runOneCycle({
   }
 
   if (signal?.aborted) return complete(stopped("aborted"), publish);
-  if (!offered.some(candidate => candidate.id === selectedId)) {
+  if (!offered.some(candidate => choiceId(candidate) === selectedId)) {
     return complete(stopped("invalid_choice"), publish);
   }
   emit(publish, {
@@ -111,7 +138,7 @@ export async function runOneCycle({
   }
   const before = beforeSnapshot.observation;
   const candidate = buildCandidates(before, currentGoal).find(
-    action => action.id === selectedId,
+    action => choiceId(action) === selectedId,
   );
   if (!candidate) {
     return complete(stopped("choice_no_longer_available"), publish);
@@ -133,7 +160,7 @@ export async function runOneCycle({
       : error.message === "Action timed out"
         ? "action_timeout"
         : "action_failed";
-    return complete(stopped(reason, { actionId: selectedId }), publish);
+    return complete(stopped(reason, { actionId: candidate.id }), publish);
   }
 
   emit(publish, { type: "cycle", status: "verifying" });
@@ -161,7 +188,7 @@ export async function runOneCycle({
       verification.status === "uncertain"
         ? "uncertain_postcondition"
         : "postcondition_failed",
-      { actionId: selectedId, verification: verification.evidence },
+      { actionId: candidate.id, verification: verification.evidence },
     ), publish);
   }
 
@@ -177,8 +204,9 @@ export async function runOneCycle({
     currentGoal,
     actionOutcomes: [...(progress.actionOutcomes || []), actionOutcome].slice(-100),
   };
+  let savedProgress;
   try {
-    await progressStore.save(nextProgress);
+    savedProgress = await progressStore.save(nextProgress);
   } catch {
     emit(publish, { type: "checkpoint", status: "failed" });
     return complete(stopped("checkpoint_failed", {
@@ -195,6 +223,7 @@ export async function runOneCycle({
     goal: currentGoal,
     observation: after,
     verification: verification.evidence,
+    progress: savedProgress === undefined ? nextProgress : savedProgress,
   }, publish);
 }
 

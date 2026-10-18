@@ -114,7 +114,7 @@ function safeMovementTargets(bot, position) {
   const targets = [];
 
   for (const [dx, dz] of WALK_DIRECTIONS) {
-    let clearPath = true;
+    let clearDistance = 0;
     for (let distance = 1; distance <= 2; distance += 1) {
       const x = Math.floor(position.x) + dx * distance;
       const z = Math.floor(position.z) + dz * distance;
@@ -129,15 +129,15 @@ function safeMovementTargets(bot, position) {
         WALK_HAZARDS.has(feet.name) ||
         WALK_HAZARDS.has(head.name)
       ) {
-        clearPath = false;
         break;
       }
+      clearDistance = distance;
     }
-    if (clearPath) {
+    if (clearDistance > 0) {
       targets.push({
-        x: Math.floor(position.x) + dx * 2,
+        x: Math.floor(position.x) + dx * clearDistance,
         y,
-        z: Math.floor(position.z) + dz * 2,
+        z: Math.floor(position.z) + dz * clearDistance,
       });
     }
   }
@@ -225,6 +225,8 @@ export function observe(bot) {
       health: bot.health,
       food: bot.food,
       difficulty,
+      gameMenuOpen: false,
+      screenOpen: false,
       inventory: inventorySummary,
       tick: bot.time.age,
       yaw: entity.yaw,
@@ -345,7 +347,7 @@ export function configurePathfinder(bot, pathfinderModule) {
   return bot.pathfinder;
 }
 
-export async function moveNear(bot, target, signal, pathfinderModule) {
+export async function moveNear(bot, target, signal, pathfinderModule, radius = 1) {
   if (signal?.aborted) throw new Error("Action aborted");
   const loadedModule =
     pathfinderModule ?? (await import("mineflayer-pathfinder"));
@@ -381,7 +383,7 @@ export async function moveNear(bot, target, signal, pathfinderModule) {
     if (signal?.aborted) return onAbort();
 
     try {
-      pathfinder.setGoal(new GoalNear(target.x, target.y, target.z, 1));
+    pathfinder.setGoal(new GoalNear(target.x, target.y, target.z, radius));
     } catch {
       finish(new Error("Pathfinder failed"));
     }

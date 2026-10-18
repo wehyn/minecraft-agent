@@ -7,6 +7,11 @@ const FRAME_LIMIT = 350_000;
 const CONNECTION_RETRY_INTERVAL_MS = 500;
 const FRAME_INTERVAL_MS = 1000 / 30;
 const SESSION_TIMEOUT_MS = 180_000;
+const CRAFTING_ACTIONS = new Set([
+  "craft_planks_from_logs",
+  "craft_sticks_from_planks",
+  "craft_table_from_planks",
+]);
 const ACTION_STATUSES = new Set([
   "accepted",
   "running",
@@ -60,9 +65,21 @@ function parseSnapshot(value) {
     !Number.isFinite(value.observation.pitch) ||
     typeof value.observation.dimension !== "string" ||
     typeof value.observation.difficulty !== "string" ||
+    typeof value.observation.gameMenuOpen !== "boolean" ||
+    typeof value.observation.screenOpen !== "boolean" ||
+    (value.observation.gameMenuOpen && !value.observation.screenOpen) ||
     !Array.isArray(value.observation.inventory) ||
     !Array.isArray(value.observation.nearbyBlocks) ||
     !Array.isArray(value.observation.safeMovementTargets) ||
+    value.observation.inventory.some(item =>
+      !item || typeof item.name !== "string" ||
+      !Number.isInteger(item.count) || item.count < 1,
+    ) ||
+    value.observation.nearbyBlocks.some(block =>
+      !block || typeof block.name !== "string" || !finitePosition(block.position) ||
+      (block.visible !== undefined && typeof block.visible !== "boolean"),
+    ) ||
+    value.observation.safeMovementTargets.some(target => !finitePosition(target)) ||
     (hasFrame && typeof value.frame !== "string") ||
     (hasFrame && value.frame.length > FRAME_LIMIT * 2)
   ) {
@@ -316,12 +333,16 @@ export async function connectPrismClient(config, { signal, onSnapshot } = {}) {
     onStatus,
   } = {}) {
     if (closed || activeCommandId) throw new Error("Prism action unavailable");
+    if (CRAFTING_ACTIONS.has(candidate?.id) && typeof candidate.inputItem !== "string") {
+      throw new Error("Invalid Prism action candidate");
+    }
     const commandId = randomUUID();
     activeCommandId = commandId;
     const action = { id: candidate.id, timeoutMs: candidate.timeoutMs };
     if (candidate.startTick !== undefined) action.startTick = candidate.startTick;
     if (candidate.target) action.target = candidate.target;
     if (candidate.radius !== undefined) action.radius = candidate.radius;
+    if (CRAFTING_ACTIONS.has(candidate.id)) action.inputItem = candidate.inputItem;
 
     try {
       const accepted = await request("/v1/action", {

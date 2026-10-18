@@ -21,12 +21,24 @@ import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
+import net.minecraft.registry.tag.BlockTags;
+import net.minecraft.registry.tag.ItemTags;
+import net.minecraft.screen.PlayerScreenHandler;
+import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.Difficulty;
+import net.minecraft.world.RaycastContext;
 import net.minecraft.world.World;
 
 import javax.imageio.IIOImage;
@@ -64,11 +76,20 @@ public final class PrismBridgeClient implements ClientModInitializer {
     private static final int PORT = 8766;
     private static final int MAX_BODY_BYTES = 16_384;
     private static final int MAX_FRAME_BYTES = 350_000;
-    private static final int INITIAL_MENU_GRACE_TICKS = 100;
+    private static final double MAX_MINING_REACH = 4.5;
     private static final Set<String> ACTION_IDS = Set.of(
+            "resume_game",
             "wait_20_ticks",
             "look_at_observed_block",
-            "move_near_observed_position"
+            "move_near_observed_position",
+            "mine_observed_log",
+            "craft_planks_from_logs",
+            "craft_sticks_from_planks",
+            "craft_table_from_planks"
+    );
+    private static final Set<String> WOOD_TYPES = Set.of(
+            "acacia", "birch", "cherry", "crimson", "dark_oak", "jungle",
+            "mangrove", "oak", "pale_oak", "spruce", "warped"
     );
     private static final Set<String> HAZARDS = Set.of(
             "cactus", "campfire", "fire", "lava", "magma_block",
@@ -91,7 +112,6 @@ public final class PrismBridgeClient implements ClientModInitializer {
     private boolean autoConnectLocalServer;
     private boolean joinAttempted;
     private boolean gameMenuLogged;
-    private int initialMenuGraceTicks = INITIAL_MENU_GRACE_TICKS;
     private volatile String playerUuid;
     private volatile ActiveAction activeAction;
     private boolean ownsForwardKey;
@@ -332,17 +352,9 @@ public final class PrismBridgeClient implements ClientModInitializer {
 
         boolean gameMenuOpen = client.currentScreen instanceof GameMenuScreen;
         if (gameMenuOpen && !gameMenuLogged) {
-            System.out.println("[Prism Agent Bridge] Game menu opened; focused="
-                    + client.isWindowFocused() + ", pauseOnLostFocus="
-                    + client.options.pauseOnLostFocus + ", graceTicks=" + initialMenuGraceTicks);
+            System.out.println("[Prism Agent Bridge] Game menu opened.");
         }
         gameMenuLogged = gameMenuOpen;
-        if (initialMenuGraceTicks > 0) {
-            if (gameMenuOpen) {
-                client.setScreen(null);
-                initialMenuGraceTicks = 0;
-            } else initialMenuGraceTicks--;
-        }
 
         playerUuid = client.player.getUuid().toString();
         ActionCommand queued = pendingAction.getAndSet(null);
@@ -361,7 +373,10 @@ public final class PrismBridgeClient implements ClientModInitializer {
     private void beginAction(MinecraftClient client, ActionCommand command) {
         String id = safeString(command.action, "id");
         try {
-            if ((client.currentScreen != null && !id.equals("look_at_observed_block"))
+            boolean resumeMenu = id.equals("resume_game")
+                    && client.currentScreen instanceof GameMenuScreen;
+            if ((client.currentScreen != null && !resumeMenu)
+                    || (id.equals("resume_game") && !resumeMenu)
                     || client.player == null || client.world == null) {
                 finishQueued(command, "failed", "client_not_ready");
                 return;
@@ -370,23 +385,51 @@ public final class PrismBridgeClient implements ClientModInitializer {
                 finishQueued(command, "failed", "stale_observation");
                 return;
             }
-            validateAction(command.action, id, client);
-            if (id.equals("wait_20_ticks")) {
-                activeAction = new ActiveAction(command, id, System.nanoTime() + 5_000_000_000L);
-            } else if (id.equals("look_at_observed_block")) {
-                pointAt(client, blockPosition(command.action));
-                finishQueued(command, "completed", null);
-                return;
-            } else {
-                BlockPos target = blockPosition(command.action);
-                int dx = Integer.signum(target.getX() - client.player.getBlockX());
-                int dz = Integer.signum(target.getZ() - client.player.getBlockZ());
-                float yaw = (float) Math.toDegrees(Math.atan2(-dx, -dz) - Math.PI);
-                client.player.setYaw(MathHelper.wrapDegrees(yaw));
-                activeAction = new ActiveAction(command, id, System.nanoTime() + 10_000_000_000L);
-                activeAction.target = target;
-                activeAction.dx = dx;
-                activeAction.dz = dz;
+            CraftState craft = validateAction(command.action, id, client);
+            switch (id) {
+                case "resume_game" -> {
+                    client.setScreen(null);
+                    finishQueued(command, "completed", null);
+                    return;
+                }
+                case "wait_20_ticks" -> activeAction = new ActiveAction(
+                        command, id, System.nanoTime() + 5_000_000_000L);
+                case "look_at_observed_block" -> {
+                    pointAt(client, blockPosition(command.action));
+                    finishQueued(command, "completed", null);
+                    return;
+                }
+                case "move_near_observed_position" -> {
+                    BlockPos target = blockPosition(command.action);
+                    int dx = Integer.signum(target.getX() - client.player.getBlockX());
+                    int dz = Integer.signum(target.getZ() - client.player.getBlockZ());
+                    float yaw = (float) Math.toDegrees(Math.atan2(-dx, -dz) - Math.PI);
+                    client.player.setYaw(MathHelper.wrapDegrees(yaw));
+                    activeAction = new ActiveAction(
+                            command, id, System.nanoTime() + 10_000_000_000L);
+                    activeAction.target = target;
+                    activeAction.dx = dx;
+                    activeAction.dz = dz;
+                    activeAction.radius = Math.toIntExact(integer(command.action, "radius"));
+                    activeAction.movementSteps = Math.abs(target.getX() - client.player.getBlockX())
+                            + Math.abs(target.getZ() - client.player.getBlockZ());
+                }
+                case "mine_observed_log" -> {
+                    BlockPos target = blockPosition(command.action);
+                    activeAction = new ActiveAction(
+                            command, id, System.nanoTime() + 20_000_000_000L);
+                    activeAction.target = target;
+                    activeAction.minedItem = client.world.getBlockState(target).getBlock().asItem();
+                    activeAction.initialItemCount = itemCount(
+                            client.player.getInventory(), activeAction.minedItem);
+                    pointAt(client, target);
+                }
+                case "craft_planks_from_logs", "craft_sticks_from_planks", "craft_table_from_planks" -> {
+                    activeAction = new ActiveAction(
+                            command, id, System.nanoTime() + 5_000_000_000L);
+                    activeAction.craft = craft;
+                }
+                default -> throw new IllegalArgumentException();
             }
             receipts.put(command.id, receipt(command.id, "running", null, false));
         } catch (Exception error) {
@@ -422,11 +465,16 @@ public final class PrismBridgeClient implements ClientModInitializer {
                 finishAction("cancelled", "manual_input");
                 return;
             }
-            if (distanceToBlock(client.player.getBlockPos(), action.target) <= 1.0) {
+            if (distanceToBlock(client.player.getBlockPos(), action.target) <= action.radius) {
                 finishAction("completed", null);
                 return;
             }
-            if (!safeStep(client.world, client.player.getBlockPos(), action.dx, action.dz)) {
+            if (!safeStep(
+                    client.world,
+                    client.player.getBlockPos(),
+                    action.dx,
+                    action.dz,
+                    action.movementSteps)) {
                 finishAction("failed", "path_blocked");
                 return;
             }
@@ -434,32 +482,163 @@ public final class PrismBridgeClient implements ClientModInitializer {
             ownsForwardKey = true;
             return;
         }
+        if (action.id.equals("mine_observed_log")) {
+            advanceMining(client, action);
+            return;
+        }
+        if (action.craft != null) {
+            advanceCrafting(client, action);
+            return;
+        }
         finishAction("failed", "invalid_action");
     }
 
-    private void validateAction(JsonObject action, String id, MinecraftClient client) {
+    private void advanceMining(MinecraftClient client, ActiveAction action) {
+        BlockState state = client.world.getBlockState(action.target);
+        if (state.isAir()) {
+            if (itemCount(client.player.getInventory(), action.minedItem)
+                    > action.initialItemCount) finishAction("completed", null);
+            return;
+        }
+        if (!state.isIn(BlockTags.LOGS)) {
+            finishAction("failed", "target_changed");
+            return;
+        }
+        var hit = client.player.raycast(MAX_MINING_REACH, 1.0F, false);
+        if (!(hit instanceof BlockHitResult blockHit)
+                || !blockHit.getBlockPos().equals(action.target)) {
+            finishAction("failed", "target_not_visible");
+            return;
+        }
+        if (!action.breakingStarted) {
+            action.breakingStarted = client.interactionManager.attackBlock(
+                    action.target, Direction.UP);
+            if (!action.breakingStarted) finishAction("failed", "break_rejected");
+            return;
+        }
+        client.interactionManager.updateBlockBreakingProgress(action.target, Direction.UP);
+    }
+
+    private void advanceCrafting(MinecraftClient client, ActiveAction action) {
+        if (!(client.player.currentScreenHandler instanceof PlayerScreenHandler handler)) {
+            finishAction("failed", "inventory_closed");
+            return;
+        }
+        CraftState craft = action.craft;
+        if (craft.stage < craft.gridSlots.length * 3) {
+            int stage = craft.stage % 3;
+            int gridSlot = craft.gridSlots[craft.stage / 3];
+            if (stage == 0) {
+                ItemStack source = handler.getSlot(craft.sourceSlot).getStack();
+                if (!handler.getCursorStack().isEmpty() || !source.isOf(craft.inputItem)
+                        || source.isEmpty() || !handler.getSlot(gridSlot).getStack().isEmpty()) {
+                    finishAction("failed", "input_changed");
+                    return;
+                }
+                client.interactionManager.clickSlot(
+                        handler.syncId,
+                        craft.sourceSlot,
+                        0,
+                        SlotActionType.PICKUP,
+                        client.player);
+            } else if (stage == 1) {
+                ItemStack cursor = handler.getCursorStack();
+                if (!cursor.isOf(craft.inputItem) || cursor.isEmpty()
+                        || !handler.getSlot(gridSlot).getStack().isEmpty()) {
+                    finishAction("failed", "input_changed");
+                    return;
+                }
+                client.interactionManager.clickSlot(
+                        handler.syncId,
+                        gridSlot,
+                        1,
+                        SlotActionType.PICKUP,
+                        client.player);
+            } else {
+                ItemStack placed = handler.getSlot(gridSlot).getStack();
+                ItemStack cursor = handler.getCursorStack();
+                if (!placed.isOf(craft.inputItem) || placed.getCount() != 1
+                        || (!cursor.isEmpty() && (!cursor.isOf(craft.inputItem)
+                                || !handler.getSlot(craft.sourceSlot).getStack().isEmpty()))) {
+                    finishAction("failed", "input_changed");
+                    return;
+                }
+                if (!cursor.isEmpty()) {
+                    client.interactionManager.clickSlot(
+                            handler.syncId,
+                            craft.sourceSlot,
+                            0,
+                            SlotActionType.PICKUP,
+                            client.player);
+                }
+            }
+            craft.stage++;
+            return;
+        }
+
+        if (!craft.submitted) {
+            ItemStack result = handler.getSlot(0).getStack();
+            if (result.isEmpty()) return;
+            if (!result.isOf(craft.outputItem) || result.getCount() != craft.outputCount
+                    || !hasInventoryRoom(handler, result, -1, 0)) {
+                finishAction("failed", "recipe_unavailable");
+                return;
+            }
+            client.interactionManager.clickSlot(
+                    handler.syncId,
+                    0,
+                    0,
+                    SlotActionType.QUICK_MOVE,
+                    client.player);
+            craft.submitted = true;
+            return;
+        }
+
+        int inputConsumed = craft.initialInputCount
+                - itemCount(client.player.getInventory(), craft.inputItem);
+        int outputGained = itemCount(client.player.getInventory(), craft.outputItem)
+                - craft.initialOutputCount;
+        if (inputConsumed == craft.inputCount && outputGained >= craft.outputCount) {
+            finishAction("completed", null);
+        }
+    }
+
+    private CraftState validateAction(JsonObject action, String id, MinecraftClient client) {
         if (!ACTION_IDS.contains(id)) throw new IllegalArgumentException();
         Set<String> expectedFields = switch (id) {
+            case "resume_game" -> Set.of("id", "timeoutMs");
             case "wait_20_ticks" -> Set.of("id", "timeoutMs", "startTick");
             case "look_at_observed_block" -> Set.of("id", "timeoutMs", "target");
             case "move_near_observed_position" -> Set.of("id", "timeoutMs", "target", "radius");
+            case "mine_observed_log" -> Set.of("id", "timeoutMs", "target");
+            case "craft_planks_from_logs", "craft_sticks_from_planks", "craft_table_from_planks" ->
+                    Set.of("id", "timeoutMs", "inputItem");
             default -> throw new IllegalArgumentException();
         };
         if (!action.keySet().equals(expectedFields)) throw new IllegalArgumentException();
         int timeout = Math.toIntExact(integer(action, "timeoutMs"));
         long expected = switch (id) {
+            case "resume_game" -> 2_000;
             case "wait_20_ticks" -> 5_000;
             case "look_at_observed_block" -> 2_000;
             case "move_near_observed_position" -> 10_000;
+            case "mine_observed_log" -> 20_000;
+            case "craft_planks_from_logs", "craft_sticks_from_planks", "craft_table_from_planks" -> 5_000;
             default -> throw new IllegalArgumentException();
         };
         if (timeout != expected) throw new IllegalArgumentException();
 
+        if (id.equals("resume_game")) return null;
         if (id.equals("wait_20_ticks")) {
             long start = integer(action, "startTick");
             long now = client.world.getTime();
             if (start > now || now - start > 20) throw new IllegalArgumentException();
-            return;
+            return null;
+        }
+        if (id.equals("craft_planks_from_logs")
+                || id.equals("craft_sticks_from_planks")
+                || id.equals("craft_table_from_planks")) {
+            return craftState(client, action, id);
         }
 
         BlockPos target = blockPosition(action);
@@ -468,21 +647,175 @@ public final class PrismBridgeClient implements ClientModInitializer {
                     || client.world.getBlockState(target).isAir()) {
                 throw new IllegalArgumentException();
             }
-            return;
+            return null;
         }
 
-        if (integer(action, "radius") != 1 || manualMovementDown(client)) {
-            throw new IllegalArgumentException();
+        if (id.equals("mine_observed_log")) {
+            BlockState state = client.world.getBlockState(target);
+            if (!client.world.getRegistryKey().equals(World.OVERWORLD)
+                    || !state.isIn(BlockTags.LOGS)
+                    || client.player.getEyePos().distanceTo(target.toCenterPos()) > MAX_MINING_REACH
+                    || !hasInventoryRoom(
+                            client.player.currentScreenHandler,
+                            new ItemStack(state.getBlock().asItem()),
+                            -1,
+                            0)) {
+                throw new IllegalArgumentException();
+            }
+            return null;
         }
+
+        if (manualMovementDown(client)) throw new IllegalArgumentException();
         int dx = target.getX() - client.player.getBlockX();
         int dz = target.getZ() - client.player.getBlockZ();
+        int steps = Math.abs(dx) + Math.abs(dz);
+        long radius = integer(action, "radius");
         if (target.getY() != client.player.getBlockY()
-                || Math.abs(dx) + Math.abs(dz) != 2
+                || !((steps == 1 && radius == 0) || (steps == 2 && radius == 1))
                 || (dx != 0 && dz != 0)
                 || safeMovementTargets(client.world, client.player.getPos()).stream()
                 .noneMatch(candidate -> candidate.equals(target))) {
             throw new IllegalArgumentException();
         }
+        return null;
+    }
+
+    private CraftState craftState(MinecraftClient client, JsonObject action, String id) {
+        String inputName = string(action, "inputItem");
+        Item input = itemByName(inputName);
+        Item output = craftingOutput(id, inputName, input);
+        int inputCount = craftingInputCount(id);
+        int outputCount = craftingOutputCount(id);
+        if (!(client.player.currentScreenHandler instanceof PlayerScreenHandler handler)
+                || !handler.getCursorStack().isEmpty()) {
+            throw new IllegalArgumentException();
+        }
+        for (int slot = 1; slot <= 4; slot++) {
+            if (!handler.getSlot(slot).getStack().isEmpty()) throw new IllegalArgumentException();
+        }
+        int sourceSlot = findInventorySlot(handler, input, inputCount);
+        ItemStack outputStack = new ItemStack(output, outputCount);
+        if (sourceSlot < 0 || !hasInventoryRoom(handler, outputStack, sourceSlot, inputCount)) {
+            throw new IllegalArgumentException();
+        }
+        int[] gridSlots = switch (id) {
+            case "craft_planks_from_logs" -> new int[] {1};
+            case "craft_sticks_from_planks" -> new int[] {1, 3};
+            case "craft_table_from_planks" -> new int[] {1, 2, 3, 4};
+            default -> throw new IllegalArgumentException();
+        };
+        return new CraftState(
+                input,
+                output,
+                inputCount,
+                outputCount,
+                itemCount(client.player.getInventory(), input),
+                itemCount(client.player.getInventory(), output),
+                sourceSlot,
+                gridSlots);
+    }
+
+    private Item craftingOutput(String id, String inputName, Item input) {
+        return switch (id) {
+            case "craft_planks_from_logs" -> {
+                if (!input.getDefaultStack().isIn(ItemTags.LOGS)) throw new IllegalArgumentException();
+                yield planksForLog(inputName);
+            }
+            case "craft_sticks_from_planks" -> {
+                if (!input.getDefaultStack().isIn(ItemTags.PLANKS) || !isSupportedPlanks(inputName)) {
+                    throw new IllegalArgumentException();
+                }
+                yield Items.STICK;
+            }
+            case "craft_table_from_planks" -> {
+                if (!input.getDefaultStack().isIn(ItemTags.PLANKS) || !isSupportedPlanks(inputName)) {
+                    throw new IllegalArgumentException();
+                }
+                yield Items.CRAFTING_TABLE;
+            }
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    private Item itemByName(String name) {
+        Identifier identifier = Identifier.of("minecraft", name);
+        Item item = Registries.ITEM.get(identifier);
+        if (item == Items.AIR || !Registries.ITEM.getId(item).equals(identifier)) {
+            throw new IllegalArgumentException();
+        }
+        return item;
+    }
+
+    private Item planksForLog(String inputName) {
+        String name = inputName.startsWith("stripped_")
+                ? inputName.substring("stripped_".length()) : inputName;
+        String wood = null;
+        for (String suffix : List.of("_log", "_wood", "_stem", "_hyphae")) {
+            if (name.endsWith(suffix)) {
+                wood = name.substring(0, name.length() - suffix.length());
+                break;
+            }
+        }
+        if (!WOOD_TYPES.contains(wood)) throw new IllegalArgumentException();
+        return itemByName(wood + "_planks");
+    }
+
+    private boolean isSupportedPlanks(String name) {
+        return name.endsWith("_planks")
+                && WOOD_TYPES.contains(name.substring(0, name.length() - "_planks".length()));
+    }
+
+    private int craftingInputCount(String id) {
+        return switch (id) {
+            case "craft_planks_from_logs" -> 1;
+            case "craft_sticks_from_planks" -> 2;
+            case "craft_table_from_planks" -> 4;
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    private int craftingOutputCount(String id) {
+        return switch (id) {
+            case "craft_planks_from_logs", "craft_sticks_from_planks" -> 4;
+            case "craft_table_from_planks" -> 1;
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    private int findInventorySlot(PlayerScreenHandler handler, Item item, int count) {
+        for (int index = 9; index <= 44; index++) {
+            ItemStack stack = handler.getSlot(index).getStack();
+            if (stack.isOf(item) && stack.getCount() >= count) return index;
+        }
+        return -1;
+    }
+
+    private boolean hasInventoryRoom(
+            net.minecraft.screen.ScreenHandler handler,
+            ItemStack output,
+            int consumedSlot,
+            int consumedCount) {
+        int capacity = 0;
+        for (int index = 9; index <= 44; index++) {
+            var slot = handler.getSlot(index);
+            if (!slot.canInsert(output)) continue;
+            ItemStack stack = slot.getStack();
+            int limit = slot.getMaxItemCount(output);
+            if (index == consumedSlot && stack.getCount() == consumedCount) capacity += limit;
+            else if (stack.isEmpty()) capacity += limit;
+            else if (ItemStack.areItemsAndComponentsEqual(stack, output)) {
+                capacity += limit - stack.getCount();
+            }
+            if (capacity >= output.getCount()) return true;
+        }
+        return false;
+    }
+
+    private int itemCount(PlayerInventory inventory, Item item) {
+        return inventory.getMainStacks().stream()
+                .filter(stack -> stack.isOf(item))
+                .mapToInt(ItemStack::getCount)
+                .sum();
     }
 
     private void pointAt(MinecraftClient client, BlockPos target) {
@@ -502,9 +835,79 @@ public final class PrismBridgeClient implements ClientModInitializer {
     private void finishAction(String status, String reason) {
         ActiveAction action = activeAction;
         if (action == null) return;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (action.id.equals("mine_observed_log") && client.interactionManager != null) {
+            client.interactionManager.cancelBlockBreaking();
+        }
+        if (action.craft != null && !cleanupCrafting(client, action)) {
+            status = "failed";
+            reason = "craft_cleanup_failed";
+        }
         activeAction = null;
-        releaseControls(MinecraftClient.getInstance());
+        releaseControls(client);
         receipts.put(action.command.id, receipt(action.command.id, status, reason, true));
+    }
+
+    private boolean cleanupCrafting(MinecraftClient client, ActiveAction action) {
+        if (client.player == null || client.interactionManager == null
+                || !(client.player.currentScreenHandler instanceof PlayerScreenHandler handler)) {
+            return false;
+        }
+        CraftState craft = action.craft;
+        if (!returnCraftInput(client, handler, craft.sourceSlot, craft.inputItem)) return false;
+        for (int gridSlot : craft.gridSlots) {
+            ItemStack input = handler.getSlot(gridSlot).getStack();
+            if (input.isEmpty()) continue;
+            if (!input.isOf(craft.inputItem) || !handler.getCursorStack().isEmpty()) return false;
+            client.interactionManager.clickSlot(
+                    handler.syncId,
+                    gridSlot,
+                    0,
+                    SlotActionType.PICKUP,
+                    client.player);
+            if (!handler.getCursorStack().isOf(craft.inputItem)
+                    || !handler.getSlot(gridSlot).getStack().isEmpty()) return false;
+            if (!returnCraftInput(client, handler, craft.sourceSlot, craft.inputItem)) {
+                client.interactionManager.clickSlot(
+                        handler.syncId,
+                        gridSlot,
+                        0,
+                        SlotActionType.PICKUP,
+                        client.player);
+                return false;
+            }
+        }
+        return handler.getCursorStack().isEmpty();
+    }
+
+    private boolean returnCraftInput(
+            MinecraftClient client,
+            PlayerScreenHandler handler,
+            int sourceSlot,
+            Item inputItem) {
+        ItemStack carried = handler.getCursorStack();
+        if (carried.isEmpty()) return true;
+        if (!carried.isOf(inputItem)) return false;
+        for (int index = 0; index <= 36; index++) {
+            int targetSlot = index == 0 ? sourceSlot : index + 8;
+            if (index > 0 && targetSlot == sourceSlot) continue;
+            var slot = handler.getSlot(targetSlot);
+            ItemStack existing = slot.getStack();
+            if (!slot.canInsert(carried)
+                    || (!existing.isEmpty()
+                            && !ItemStack.areItemsAndComponentsEqual(existing, carried))
+                    || slot.getMaxItemCount(carried) - existing.getCount() < carried.getCount()) {
+                continue;
+            }
+            client.interactionManager.clickSlot(
+                    handler.syncId,
+                    targetSlot,
+                    0,
+                    SlotActionType.PICKUP,
+                    client.player);
+            return handler.getCursorStack().isEmpty();
+        }
+        return false;
     }
 
     private void finishQueued(ActionCommand command, String status, String reason) {
@@ -547,6 +950,8 @@ public final class PrismBridgeClient implements ClientModInitializer {
         value.addProperty("tick", world.getTime());
         value.addProperty("yaw", Math.toRadians(MathHelper.wrapDegrees(player.getYaw() + 180.0f)));
         value.addProperty("pitch", -Math.toRadians(player.getPitch()));
+        value.addProperty("gameMenuOpen", client.currentScreen instanceof GameMenuScreen);
+        value.addProperty("screenOpen", client.currentScreen != null);
 
         JsonArray inventory = new JsonArray();
         PlayerInventory playerInventory = player.getInventory();
@@ -561,7 +966,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
         value.add("inventory", inventory);
 
         JsonArray nearby = new JsonArray();
-        nearbyBlocks(world, position).forEach(block -> nearby.add(block));
+        nearbyBlocks(world, position, player).forEach(block -> nearby.add(block));
         value.add("nearbyBlocks", nearby);
         JsonArray targets = new JsonArray();
         safeMovementTargets(world, position).forEach(target -> targets.add(position(
@@ -570,9 +975,11 @@ public final class PrismBridgeClient implements ClientModInitializer {
         return value;
     }
 
-    private List<JsonObject> nearbyBlocks(World world, net.minecraft.util.math.Vec3d position) {
+    private List<JsonObject> nearbyBlocks(
+            World world, net.minecraft.util.math.Vec3d position, Entity player) {
         List<BlockEntry> blocks = new ArrayList<>();
         BlockPos origin = BlockPos.ofFloored(position);
+        net.minecraft.util.math.Vec3d eyePosition = player.getEyePos();
         BlockPos.Mutable mutable = new BlockPos.Mutable();
         for (int x = -8; x <= 8; x++) {
             for (int y = -8; y <= 8; y++) {
@@ -582,23 +989,46 @@ public final class PrismBridgeClient implements ClientModInitializer {
                     BlockState state = world.getBlockState(mutable);
                     if (state.isAir()) continue;
                     String name = Registries.BLOCK.getId(state.getBlock()).getPath();
-                    blocks.add(new BlockEntry(name, mutable.toImmutable(),
-                            Math.sqrt(Math.pow(mutable.getX() - position.x, 2)
-                                    + Math.pow(mutable.getY() - position.y, 2)
-                                    + Math.pow(mutable.getZ() - position.z, 2))));
+                    BlockPos blockPosition = mutable.toImmutable();
+                    double distance = blockPosition.toCenterPos().distanceTo(eyePosition);
+                    Boolean visible = state.isIn(BlockTags.LOGS) && distance <= MAX_MINING_REACH
+                            ? isVisibleBlock(world, blockPosition, eyePosition, player)
+                            : null;
+                    blocks.add(new BlockEntry(name, blockPosition, distance, visible));
                 }
             }
         }
-        blocks.sort((left, right) -> Double.compare(left.distance, right.distance));
+        blocks.sort((left, right) -> {
+            int priority = Boolean.compare(
+                    Boolean.TRUE.equals(right.visible), Boolean.TRUE.equals(left.visible));
+            return priority == 0 ? Double.compare(left.distance, right.distance) : priority;
+        });
         List<JsonObject> result = new ArrayList<>();
         for (BlockEntry block : blocks.stream().limit(16).toList()) {
             JsonObject value = new JsonObject();
             value.addProperty("name", block.name);
             value.add("position", position(
                     block.position.getX(), block.position.getY(), block.position.getZ()));
+            value.addProperty("visible", block.visible != null
+                    ? block.visible
+                    : isVisibleBlock(world, block.position, eyePosition, player));
             result.add(value);
         }
         return result;
+    }
+
+    private boolean isVisibleBlock(
+            World world,
+            BlockPos position,
+            net.minecraft.util.math.Vec3d eyePosition,
+            Entity player) {
+        BlockHitResult hit = world.raycast(new RaycastContext(
+                eyePosition,
+                position.toCenterPos(),
+                RaycastContext.ShapeType.OUTLINE,
+                RaycastContext.FluidHandling.NONE,
+                player));
+        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(position);
     }
 
     private List<BlockPos> safeMovementTargets(World world, net.minecraft.util.math.Vec3d position) {
@@ -608,7 +1038,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
         List<BlockPos> targets = new ArrayList<>();
         int[][] directions = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (int[] direction : directions) {
-            boolean clear = true;
+            int clearDistance = 0;
             for (int distance = 1; distance <= 2; distance++) {
                 int x = baseX + direction[0] * distance;
                 int z = baseZ + direction[1] * distance;
@@ -618,18 +1048,20 @@ public final class PrismBridgeClient implements ClientModInitializer {
                 if (!solidFloor(world, floor) || !passable(world, feet)
                         || !passable(world, head) || hazard(world, floor)
                         || hazard(world, feet) || hazard(world, head)) {
-                    clear = false;
                     break;
                 }
+                clearDistance = distance;
             }
-            if (clear) targets.add(new BlockPos(
-                    baseX + direction[0] * 2, baseY, baseZ + direction[1] * 2));
+            if (clearDistance > 0) targets.add(new BlockPos(
+                    baseX + direction[0] * clearDistance,
+                    baseY,
+                    baseZ + direction[1] * clearDistance));
         }
         return targets;
     }
 
-    private boolean safeStep(World world, BlockPos current, int dx, int dz) {
-        for (int distance = 1; distance <= 2; distance++) {
+    private boolean safeStep(World world, BlockPos current, int dx, int dz, int steps) {
+        for (int distance = 1; distance <= steps; distance++) {
             BlockPos floor = current.add(dx * distance, -1, dz * distance);
             BlockPos feet = current.add(dx * distance, 0, dz * distance);
             BlockPos head = current.add(dx * distance, 1, dz * distance);
@@ -846,7 +1278,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
     private record ActionCommand(String id, long basedOnSequence, JsonObject action) {
     }
 
-    private record BlockEntry(String name, BlockPos position, double distance) {
+    private record BlockEntry(String name, BlockPos position, double distance, Boolean visible) {
     }
 
     private static final class ActiveAction {
@@ -856,11 +1288,49 @@ public final class PrismBridgeClient implements ClientModInitializer {
         private BlockPos target;
         private int dx;
         private int dz;
+        private int radius;
+        private int movementSteps;
+        private Item minedItem;
+        private int initialItemCount;
+        private boolean breakingStarted;
+        private CraftState craft;
 
         private ActiveAction(ActionCommand command, String id, long deadlineNanos) {
             this.command = command;
             this.id = id;
             this.deadlineNanos = deadlineNanos;
+        }
+    }
+
+    private static final class CraftState {
+        private final Item inputItem;
+        private final Item outputItem;
+        private final int inputCount;
+        private final int outputCount;
+        private final int initialInputCount;
+        private final int initialOutputCount;
+        private final int sourceSlot;
+        private final int[] gridSlots;
+        private int stage;
+        private boolean submitted;
+
+        private CraftState(
+                Item inputItem,
+                Item outputItem,
+                int inputCount,
+                int outputCount,
+                int initialInputCount,
+                int initialOutputCount,
+                int sourceSlot,
+                int[] gridSlots) {
+            this.inputItem = inputItem;
+            this.outputItem = outputItem;
+            this.inputCount = inputCount;
+            this.outputCount = outputCount;
+            this.initialInputCount = initialInputCount;
+            this.initialOutputCount = initialOutputCount;
+            this.sourceSlot = sourceSlot;
+            this.gridSlots = gridSlots;
         }
     }
 
