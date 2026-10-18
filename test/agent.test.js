@@ -232,13 +232,15 @@ test("JEV receives only candidate IDs and descriptions", async () => {
     progressStore: { save: async () => {} },
   });
 
-  assert.deepEqual(
-    received.map(candidate => Object.keys(candidate).sort()),
-    [
-      ["description", "id"],
-      ["description", "id"],
-      ["description", "id"],
-    ],
+  assert.deepEqual(received.find(candidate => candidate.id === "wait_20_ticks"), {
+    id: "wait_20_ticks",
+    description: "Wait for 20 game ticks",
+  });
+  assert.equal(
+    received.every(candidate =>
+      Object.keys(candidate).sort().join(",") === "description,id",
+    ),
+    true,
   );
 });
 
@@ -499,16 +501,16 @@ test("wood candidates depend on nearby Overworld logs and inventory counts", () 
   const farLog = observe(fakeBot({
     blocks: [{ x: 2, y: 64, z: 0, name: "oak_log" }],
   }));
-  assert.equal(
-    buildCandidates(farLog, goal).some(action => action.id === "mine_observed_log"),
-    false,
+  assert.deepEqual(
+    buildCandidates(farLog, goal).find(action => action.id === "mine_observed_log")?.target,
+    { x: 2, y: 64, z: 0 },
   );
   const cornerLog = observe(fakeBot({
     blocks: [{ x: 1, y: 64, z: 1, name: "oak_log" }],
   }));
-  assert.equal(
-    buildCandidates(cornerLog, goal).some(action => action.id === "mine_observed_log"),
-    false,
+  assert.deepEqual(
+    buildCandidates(cornerLog, goal).find(action => action.id === "mine_observed_log")?.target,
+    { x: 1, y: 64, z: 1 },
   );
 });
 

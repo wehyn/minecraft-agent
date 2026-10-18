@@ -403,7 +403,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
                     BlockPos target = blockPosition(command.action);
                     int dx = Integer.signum(target.getX() - client.player.getBlockX());
                     int dz = Integer.signum(target.getZ() - client.player.getBlockZ());
-                    float yaw = (float) Math.toDegrees(Math.atan2(-dx, -dz) - Math.PI);
+                    float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
                     client.player.setYaw(MathHelper.wrapDegrees(yaw));
                     activeAction = new ActiveAction(
                             command, id, System.nanoTime() + 10_000_000_000L);
@@ -825,7 +825,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
         double horizontal = Math.hypot(dx, dz);
         double targetYaw = Math.atan2(-dx, -dz);
         double targetPitch = Math.atan2(dy, horizontal);
-        float gameYaw = (float) Math.toDegrees(targetYaw - Math.PI);
+        float gameYaw = (float) Math.toDegrees(Math.PI - targetYaw);
         float gamePitch = (float) -Math.toDegrees(targetPitch);
         client.player.setYaw(MathHelper.wrapDegrees(gameYaw));
         client.player.setPitch(gamePitch);
@@ -948,7 +948,7 @@ public final class PrismBridgeClient implements ClientModInitializer {
         Difficulty difficulty = world.getDifficulty();
         value.addProperty("difficulty", difficulty.getName());
         value.addProperty("tick", world.getTime());
-        value.addProperty("yaw", Math.toRadians(MathHelper.wrapDegrees(player.getYaw() + 180.0f)));
+        value.addProperty("yaw", Math.toRadians(MathHelper.wrapDegrees(180.0f - player.getYaw())));
         value.addProperty("pitch", -Math.toRadians(player.getPitch()));
         value.addProperty("gameMenuOpen", client.currentScreen instanceof GameMenuScreen);
         value.addProperty("screenOpen", client.currentScreen != null);
