@@ -5,7 +5,7 @@ import {
   advancementFileFor,
   hasFreeTheEnd,
 } from "./advancement.js";
-import { runOneCycle, stopAgent } from "./agent.js";
+import { runCyclesUntilStopped, runOneCycle, stopAgent } from "./agent.js";
 import { loadProgress, saveProgress } from "./progress.js";
 import { connectPrismClient } from "./minecraft/prism-client.js";
 import { createDecisionPanel } from "./panel/server.js";
@@ -99,41 +99,71 @@ export async function runAgent({
           nextProgress.run.elapsedMs,
           Date.now() - startedAtMs,
         );
-        checkpoint = {
+        const nextCheckpoint = {
           ...nextProgress,
           run: { ...nextProgress.run, elapsedMs },
         };
-        await saveProgress(config.progressFile, checkpoint);
+        await saveProgress(config.progressFile, nextCheckpoint);
+        checkpoint = nextCheckpoint;
+        return checkpoint;
       },
     };
 
-    result = await runOneCycle({
-      driver,
-      planner,
-      jev,
+    result = await runCyclesUntilStopped({
       progress: currentProgress,
-      progressStore,
       signal: controller.signal,
-      publish: event => panel.publish(event),
-    });
-
-    if (result.status === "verified") {
-      let victory = "unknown";
-      try {
-        const advancementFile = advancementFileFor({
-          worldDir: config.minecraft.worldDir,
-          playerUuid: driver.session.playerUuid,
+      runCycle: async cycleProgress => {
+        let cycle = await runOneCycle({
+          driver,
+          planner,
+          jev,
+          progress: cycleProgress,
+          progressStore,
+          signal: controller.signal,
+          publish: event => panel.publish(event),
         });
-        if (hasFreeTheEnd({ advancementFile, playerUuid: driver.session.playerUuid })) {
-          victory = "confirmed";
-          checkpoint = { ...checkpoint, victory };
-          await saveProgress(config.progressFile, checkpoint).catch(() => {});
+        if (cycle.status !== "verified") return cycle;
+
+        let victory = "unknown";
+        try {
+          const advancementFile = advancementFileFor({
+            worldDir: config.minecraft.worldDir,
+            playerUuid: driver.session.playerUuid,
+          });
+          if (hasFreeTheEnd({ advancementFile, playerUuid: driver.session.playerUuid })) {
+            victory = "confirmed";
+            try {
+              const saved = await progressStore.save({
+                ...cycle.progress,
+                victory,
+              });
+              cycle = { ...cycle, progress: saved };
+            } catch {
+              panel.publish({ type: "checkpoint", status: "failed" });
+              return {
+                ...cycle,
+                status: "stopped",
+                reason: "checkpoint_failed",
+                victory,
+              };
+            }
+          }
+        } catch {
+          victory = "unknown";
         }
-      } catch {
-        victory = "unknown";
-      }
-      panel.publish({ type: "victory", status: victory });
-      result = { ...result, victory };
+        panel.publish({ type: "victory", status: victory });
+        return { ...cycle, victory };
+      },
+    });
+    if (progress.victory === "confirmed" && result.victory === "confirmed") {
+      panel.publish({ type: "victory", status: "confirmed" });
+      panel.publish({
+        type: "result",
+        status: result.status,
+        reason: result.reason,
+        actionId: result.actionId,
+        evidence: result.verification,
+      });
     }
 
     console.log(JSON.stringify({
@@ -152,7 +182,7 @@ export async function runAgent({
 
 export async function main(args = process.argv.slice(2)) {
   if (args.length > 1 || (args.length === 1 && args[0] !== "smoke:agent")) {
-    console.error("Run one Prism cycle with: npm start");
+    console.error("Run Prism Agent with: npm start");
     process.exitCode = 2;
     return;
   }

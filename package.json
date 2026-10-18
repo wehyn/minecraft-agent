@@ -12,7 +12,7 @@
     "smoke:codex-lb": "node --env-file-if-exists=.env scripts/smoke-codex-lb.js",
     "smoke:typesafe-jev": "node --env-file-if-exists=.env scripts/smoke-typesafe-jev.js",
     "smoke:minecraft": "node --env-file-if-exists=.env scripts/smoke-minecraft.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "mineflayer": "4.39.0",

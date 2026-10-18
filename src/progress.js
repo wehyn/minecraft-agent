@@ -10,8 +10,13 @@ import path from "node:path";
 import { isValidGoal } from "./goal.js";
 
 const ACTION_IDS = new Set([
+  "resume_game",
   "wait_20_ticks",
   "look_at_observed_block",
+  "mine_observed_log",
+  "craft_planks_from_logs",
+  "craft_sticks_from_planks",
+  "craft_table_from_planks",
   "move_near_observed_position",
 ]);
 
@@ -63,7 +68,43 @@ function validEvidence(id, evidence) {
       evidence.degreesFromTarget <= 5
     );
   }
-  return (
+  if (id === "resume_game") {
+    return (
+      keys.length === 1 &&
+      keys[0] === "gameMenuOpen" &&
+      evidence.gameMenuOpen === false
+    );
+  }
+  if (id === "mine_observed_log") {
+    return (
+      keys.length === 2 &&
+      keys.includes("blockRemoved") &&
+      keys.includes("dropsCollected") &&
+      evidence.blockRemoved === true &&
+      Number.isInteger(evidence.dropsCollected) &&
+      evidence.dropsCollected >= 1
+    );
+  }
+  if ([
+    "craft_planks_from_logs",
+    "craft_sticks_from_planks",
+    "craft_table_from_planks",
+  ].includes(id)) {
+    const [inputCount, outputCount] = id === "craft_planks_from_logs"
+      ? [1, 4]
+      : id === "craft_sticks_from_planks"
+        ? [2, 4]
+        : [4, 1];
+    return (
+      keys.length === 2 &&
+      keys.includes("inputConsumed") &&
+      keys.includes("outputGained") &&
+      evidence.inputConsumed === inputCount &&
+      Number.isInteger(evidence.outputGained) &&
+      evidence.outputGained >= outputCount
+    );
+  }
+  return id === "move_near_observed_position" && (
     keys.length === 1 &&
     keys[0] === "distanceBlocks" &&
     Number.isFinite(evidence.distanceBlocks) &&

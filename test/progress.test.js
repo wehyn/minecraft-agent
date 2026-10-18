@@ -71,6 +71,24 @@ test("saveProgress persists a verified record that loads unchanged", async t => 
   assert.deepEqual(await loadProgress(file), progress);
 });
 
+test("saveProgress keeps verified menu, log, and crafting outcomes", async t => {
+  const directory = await temporaryDirectory(t);
+  const file = path.join(directory, "progress.json");
+  const progress = await loadProgress(file);
+  const at = "2026-10-17T00:00:02.500Z";
+  progress.actionOutcomes = [
+    { id: "resume_game", outcome: "verified", at, evidence: { gameMenuOpen: false } },
+    { id: "mine_observed_log", outcome: "verified", at, evidence: { blockRemoved: true, dropsCollected: 1 } },
+    { id: "craft_planks_from_logs", outcome: "verified", at, evidence: { inputConsumed: 1, outputGained: 4 } },
+    { id: "craft_sticks_from_planks", outcome: "verified", at, evidence: { inputConsumed: 2, outputGained: 4 } },
+    { id: "craft_table_from_planks", outcome: "verified", at, evidence: { inputConsumed: 4, outputGained: 1 } },
+  ];
+
+  await saveProgress(file, progress);
+
+  assert.deepEqual(await loadProgress(file), progress);
+});
+
 test("saveProgress refuses to replace an existing corrupt record", async t => {
   const directory = await temporaryDirectory(t);
   const file = path.join(directory, "progress.json");
